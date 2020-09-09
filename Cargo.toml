@@ -1,0 +1,19 @@
+[package]
+name = "tock-haybale"
+version = "0.1.0"
+authors = ["Hudson Ayers <hayers@stanford.edu>"]
+edition = "2018"
+
+[dependencies]
+llvm-ir = "0.7.1" #Needs to be same version as what haybale uses
+glob = "0.3.0"
+simple_logger = "1.6.0"
+log = "0.4.11"
+rustc-demangle = "0.1.16"
+
+[dependencies.haybale]
+version = "0.6.0"
+features = ["llvm-10"]
+
+[patch.crates-io]
+haybale = { path = "../../../code_repos/haybale" }
