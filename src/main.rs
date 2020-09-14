@@ -149,9 +149,9 @@ fn main() -> Result<(), String> {
 
     let func_name = &matches.next().unwrap().0.name.clone(); // i2c, fails bc panic
 
-    let func_name = &matches.next().unwrap().0.name.clone(); //ble, fails
+    //let func_name = &matches.next().unwrap().0.name.clone(); //ble, fails
 
-    let func_name = &matches.next().unwrap().0.name.clone(); //console, fails
+    //let func_name = &matches.next().unwrap().0.name.clone(); //console, fails
 
     // thats all drivers with commands
 
@@ -185,8 +185,11 @@ fn main() -> Result<(), String> {
     println!("demangled: {:?}", demangled);
     let mut config: Config<DefaultBackend> = Config::default();
     config.null_pointer_checking = config::NullPointerChecking::None; // In the Tock kernel, we trust that Rust safety mechanisms prevent null pointer dereferences.
-    config.loop_bound = 10; // default is 10, go higher to detect unbounded loops
-    config.solver_query_timeout = Some(std::time::Duration::new(10000, 0));
+    config.loop_bound = 50; // default is 10, raise if larger loops exist
+    config.solver_query_timeout = Some(std::time::Duration::new(10000, 0)); // extend query timeout
+    config
+        .function_hooks
+        .add_rust_demangled("kernel::debug::panic", &function_hooks::abort_hook);
     if let Some((len, state)) = find_longest_path(func_name, &project, config) {
         println!("len: {}", len);
     //println!("{}", state.pretty_path_interleaved());
