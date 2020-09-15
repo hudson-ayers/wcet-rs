@@ -146,7 +146,7 @@ fn main() -> Result<(), String> {
 
     let func_name = &matches.next().unwrap().0.name.clone(); // i2c, fails bc panic
 
-    //let func_name = &matches.next().unwrap().0.name.clone(); //ble, fails
+    let func_name = &matches.next().unwrap().0.name.clone(); //ble, fails
 
     //let func_name = &matches.next().unwrap().0.name.clone(); //console, fails
 
