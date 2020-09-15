@@ -1,0 +1,4 @@
+[submodule "tock"]
+	path = tock
+	url = https://github.com/hudson-ayers/tock
+	branch = haybale-2

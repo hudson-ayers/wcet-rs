@@ -2,6 +2,7 @@ use glob::glob;
 use haybale::backend::*;
 use haybale::*;
 use llvm_ir::{Module, Name};
+use std::process::Command;
 use std::result::Result;
 use std::string::String;
 
@@ -83,42 +84,38 @@ pub fn find_longest_path<'p>(
     longest_path_state.map_or(None, |state| Some((longest_path_len, state)))
 }
 
-/// Return the longest possible path for a given method call on a trait object.
-pub fn longest_path_dyn_dispatch(
-    bc_dir: &str,
-    method_name: &str,
-    trait_name: &str,
-) -> Result<(usize), String> {
-    // TODO: Lots of repeated code here
-    let glob2 = "/**/*.bc";
-    let paths = glob(&[bc_dir, glob2].concat()).unwrap().map(|x| x.unwrap());
-    let project = Project::from_bc_paths(paths)?;
-    let matches = project
-        .all_functions()
-        .filter(|(f, _m)| f.name.contains(method_name) && f.name.contains(trait_name));
-    let mut longest = 0;
-    let mut longest_path = None;
-    for (f, _m) in matches {
-        let mut config: Config<DefaultBackend> = Config::default();
-        config.null_pointer_checking = config::NullPointerChecking::None; // In the Tock kernel, we trust that Rust safety mechanisms prevent null pointer dereferences.
-        config.loop_bound = 100; // default is 10, go higher to detect unbounded loops
-        println!("tracing {:?}", f.name);
-        if let Some((len, state)) = find_longest_path(&f.name, &project, config) {
-            if len > longest {
-                longest = len;
-                longest_path = Some(state.get_path());
-                println!("new longest: {:?}", f.name);
-            }
-        }
-    }
-    Ok(longest)
-}
-
 fn main() -> Result<(), String> {
+    // comment in to enable logs in Haybale. Useful for debugging
+    // but dramatically slow down executions and increase memory use.
+    // generally, should be first line of main if included.
     //simple_logger::init().unwrap();
 
-    //let bc_dir = "/home/hudson/research/real_time/test_workspace/target/debug/deps";
-    let bc_dir = "/home/hudson/tock/target/thumbv7em-none-eabi/release/deps/";
+    // set to board to be evaluated. Currently, not all tock boards are supported.
+    // TODO: Fix below to not use rust version of haybale crate (may need build.rs)
+    //let board_path_str = "tock/boards/redboard_artemis_nano".to_owned();
+    /*let output1 = Command::new("sh")
+        .arg("-c")
+        .arg(
+            "exec bash -l cd ".to_owned()
+                + &board_path_str
+                + &" && source ~/.bashrc && make clean && make",
+        )
+        .output()
+        .expect("failed to execute process");
+    println!("{}", String::from_utf8(output1.stderr).unwrap());
+
+    let output2 = Command::new("make")
+        .arg("-C")
+        .arg(&board_path_str)
+        .output()
+        .expect("failed to execute process");
+    println!("{}", String::from_utf8(output2.stderr).unwrap());
+    */
+
+    // For now, assume target under analysis is thumbv7em architecture,
+    // and located in the tock submodule of this crate
+    let bc_dir = "tock/target/thumbv7em-none-eabi/release/deps/";
+
     //let func_name = "haybale_test::STimer::dyn_dispatch";
     //let func_name = "dyn_dispatch";
     //let func_name = "apollo3::stimer::STimer::handle_interrupt";
