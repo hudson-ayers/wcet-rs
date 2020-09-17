@@ -1,12 +1,11 @@
 use glob::glob;
 use haybale::backend::*;
 use haybale::*;
-use llvm_ir::{Module, Name};
 use std::process::Command;
 use std::result::Result;
 use std::string::String;
+use std::thread;
 
-#[macro_use]
 extern crate log;
 extern crate simple_logger;
 
@@ -84,6 +83,71 @@ pub fn find_longest_path<'p>(
     longest_path_state.map_or(None, |state| Some((longest_path_len, state)))
 }
 
+enum KernelWorkType {
+    InterruptHandlers,
+    CommandSyscalls,
+    SubscribeSyscalls,
+    AllowSyscalls,
+    MemopSyscall,
+}
+
+/// Function for retrieving the types of Tock functions which this tool is capable of profiling,
+/// by matching on the mangled function names.
+fn retrieve_functions_for_analysis<'p>(
+    project: &'p Project,
+    kind: KernelWorkType,
+) -> Box<dyn Iterator<Item = (&llvm_ir::function::Function, &llvm_ir::module::Module)> + 'p> {
+    // TODO: Filtering on demangled function names should allow for more precise matches with fewer
+    // false positives
+    //let demangled = rustc_demangle::demangle(func_name);
+    match kind {
+        KernelWorkType::InterruptHandlers => Box::new(
+            project
+                .all_functions()
+                .filter(|(f, _m)| f.name.contains("handle_interrupt")),
+        ),
+        KernelWorkType::CommandSyscalls => Box::new(project.all_functions().filter(|(f, _m)| {
+            f.name.contains("command")
+                && f.name.contains("Driver")
+                && !f.name.contains("closure")
+                && !f.name.contains("command_complete")
+        })),
+        KernelWorkType::AllowSyscalls => Box::new(project.all_functions().filter(|(f, _m)| {
+            f.name.contains("allow") && f.name.contains("Driver") && !f.name.contains("closure")
+        })),
+        KernelWorkType::SubscribeSyscalls => Box::new(project.all_functions().filter(|(f, _m)| {
+            f.name.contains("subscribe") && f.name.contains("Driver") && !f.name.contains("closure")
+        })),
+        KernelWorkType::MemopSyscall => panic!("Memop support not yet implemented"),
+    }
+}
+
+/// Given a bc directory and a function name to analyze, this function
+/// will symbolically execute the passed function, and write the results to a file.
+/// This is useful for performing multiple symbolic executions simultaneously,
+/// especially because each execution is single threaded.
+fn analyze_and_save_results(bc_dir: &str, func_name: &str) -> Result<(), String> {
+    let glob2 = "/**/*.bc";
+    let paths = glob(&[bc_dir, glob2].concat()).unwrap().map(|x| x.unwrap());
+    let project = Project::from_bc_paths(paths)?;
+
+    let mut config: Config<DefaultBackend> = Config::default();
+    config.null_pointer_checking = config::NullPointerChecking::None; // In the Tock kernel, we trust that Rust safety mechanisms prevent null pointer dereferences.
+    config.loop_bound = 50; // default is 10, raise if larger loops exist
+    config.solver_query_timeout = Some(std::time::Duration::new(100, 0)); // extend query timeout
+    config
+        .function_hooks
+        .add_rust_demangled("kernel::debug::panic", &function_hooks::abort_hook);
+    if let Some((len, state)) = find_longest_path(func_name, &project, config) {
+        println!("len: {}", len);
+    //println!("{}", state.pretty_path_source());
+    //print_instrs(state.get_path());
+    } else {
+        panic!("No paths found");
+    }
+    Ok(())
+}
+
 fn main() -> Result<(), String> {
     // comment in to enable logs in Haybale. Useful for debugging
     // but dramatically slow down executions and increase memory use.
@@ -116,90 +180,60 @@ fn main() -> Result<(), String> {
     // and located in the tock submodule of this crate
     let bc_dir = "tock/target/thumbv7em-none-eabi/release/deps/";
 
-    //let func_name = "haybale_test::STimer::dyn_dispatch";
-    //let func_name = "dyn_dispatch";
+    // Make a vector to hold the children which are spawned.
+    let mut functions_to_analyze = vec![];
+
+    //begin list of all interrupts for apollo3 board/chip:
+
     //let func_name = "apollo3::stimer::STimer::handle_interrupt";
     //let func_name = "apollo3::iom::Iom::handle_interrupt";
     //let func_name = "apollo3::uart::Uart::handle_interrupt";
     //let func_name = "apollo3::ble::Ble::handle_interrupt";
-    //let func_name = "capsules::led::Led::Driver::command";
-    //let func_name = "_ZN109_$LT$capsules..ble_advertising_driver..BLE$LT$B$C$A$GT$$u20$as$u20$kernel..hil..ble_advertising..RxClient$GT$13receive_event17hf1075a8e774afbddE";
     //let func_name = "apollo3::gpio::Port::handle_interrupt";
-    //let tmp = longest_path_dyn_dispatch(bc_dir, "AlarmClient", "fired");
-    //println!("Longest trait path: {:?}", tmp);
+
     let glob2 = "/**/*.bc";
     let paths = glob(&[bc_dir, glob2].concat()).unwrap().map(|x| x.unwrap());
     let project = Project::from_bc_paths(paths)?;
 
-    // TODO: Replace below hack with reliable demangling approach
-    let mut matches = project.all_functions().filter(|(f, _m)| {
-        f.name.contains("command")
-            && f.name.contains("Driver")
-            && !f.name.contains("closure")
-            && !f.name.contains("command_complete")
-    });
-    let func_name = &matches.next().unwrap().0.name.clone(); //led
+    let mut command_syscalls =
+        retrieve_functions_for_analysis(&project, KernelWorkType::CommandSyscalls);
+    let func_name = &command_syscalls.nth(0).unwrap().0.name.clone(); //led
 
-    let func_name = &matches.next().unwrap().0.name.clone(); //gpio
+    //let func_name = &command_syscalls.nth(1).unwrap().0.name.clone(); //gpio
+    //let func_name = &command_syscalls.nth(2).unwrap().0.name.clone(); // alarm, fails
+    //let func_name = &command_syscalls.nth(3).unwrap().0.name.clone(); // i2c, fails bc panic
+    //let func_name = &command_syscalls.nth(4).unwrap().0.name.clone(); //ble, fails
+    //let func_name = &command_syscalls.nth(5).unwrap().0.name.clone(); //console, fails
 
-    let func_name = &matches.next().unwrap().0.name.clone(); // alarm, fails
+    let mut subscribe_syscalls =
+        retrieve_functions_for_analysis(&project, KernelWorkType::SubscribeSyscalls);
+    // comments at end indicate which function this corresponds to on the apollo3
+    //let func_name = &subscribe_syscalls.nth(0).unwrap().0.name.clone(); //dummy impl, 4
+    //let func_name = &subscribe_syscalls.nth(1).unwrap().0.name.clone(); //gpio
+    //let func_name = &subscribe_syscalls.nth(2).unwrap().0.name.clone(); //alarm
+    //let func_name = &subscribe_syscalls.nth(3).unwrap().0.name.clone(); //i2c
+    //let func_name = &subscribe_syscalls.nth(4).unwrap().0.name.clone(); //ble
+    //let func_name = &subscribe_syscalls.nth(5).unwrap().0.name.clone(); //console
 
-    let func_name = &matches.next().unwrap().0.name.clone(); // i2c, fails bc panic
+    let mut allow_syscalls =
+        retrieve_functions_for_analysis(&project, KernelWorkType::AllowSyscalls);
 
-    let func_name = &matches.next().unwrap().0.name.clone(); //ble, fails
+    //let func_name = &allow_syscalls.nth(0).unwrap().0.name.clone(); //default
+    //let func_name = &allow_syscalls.nth(1).unwrap().0.name.clone(); //also default??
+    //let func_name = &allow_syscalls.nth(2).unwrap().0.name.clone(); //also default??
+    //let func_name = &allow_syscalls.nth(3).unwrap().0.name.clone(); //i2c
+    //let func_name = &allow_syscalls.nth(4).unwrap().0.name.clone(); //ble, fails
+    //let func_name = &allow_syscalls.nth(5).unwrap().0.name.clone(); //console, fails
 
-    //let func_name = &matches.next().unwrap().0.name.clone(); //console, fails
-
-    // thats all drivers with commands
-
-    /*let mut matches = project.all_functions().filter(|(f, _m)| {
-        f.name.contains("subscribe") && f.name.contains("Driver") && !f.name.contains("closure")
-    });
-    let func_name = &matches.next().unwrap().0.name.clone(); //dummy impl, 4
-    let func_name = &matches.next().unwrap().0.name.clone(); //gpio
-    let func_name = &matches.next().unwrap().0.name.clone(); //alarm
-    let func_name = &matches.next().unwrap().0.name.clone(); //i2c
-    let func_name = &matches.next().unwrap().0.name.clone(); //ble
-    let func_name = &matches.next().unwrap().0.name.clone(); //console
-    */
-
-    //thats all drivers with subscribe
-
-    /*let mut matches = project.all_functions().filter(|(f, _m)| {
-        f.name.contains("allow") && f.name.contains("Driver") && !f.name.contains("closure")
-    });
-    let func_name = &matches.next().unwrap().0.name.clone(); //default
-    let func_name = &matches.next().unwrap().0.name.clone(); //also default??
-    let func_name = &matches.next().unwrap().0.name.clone(); //also default??
-    let func_name = &matches.next().unwrap().0.name.clone(); //i2c
-    let func_name = &matches.next().unwrap().0.name.clone(); //ble, fails
-    let func_name = &matches.next().unwrap().0.name.clone(); //console, fails
-    */
-
-    //thats all drivers with allow
-
-    let demangled = rustc_demangle::demangle(func_name);
-    println!("demangled: {:?}", demangled);
-    let mut config: Config<DefaultBackend> = Config::default();
-    config.null_pointer_checking = config::NullPointerChecking::None; // In the Tock kernel, we trust that Rust safety mechanisms prevent null pointer dereferences.
-    config.loop_bound = 50; // default is 10, raise if larger loops exist
-    config.solver_query_timeout = Some(std::time::Duration::new(10000, 0)); // extend query timeout
-    config
-        .function_hooks
-        .add_rust_demangled("kernel::debug::panic", &function_hooks::abort_hook);
-    if let Some((len, state)) = find_longest_path(func_name, &project, config) {
-        println!("len: {}", len);
-    //println!("{}", state.pretty_path_interleaved());
-    //print_instrs(state.get_path());
-
-    /*let a = &state
-        .get_a_solution_for_irname(&String::from(func_name), &Name::from(1))?
-        .expect("Expected there to be a solution")
-        .as_u64()
-        .expect("Expected solution to fit in 64 bits");
-    println!("Input to two_paths that gives this path: {}", a);*/
-    } else {
-        panic!("No paths found");
+    functions_to_analyze.push(func_name);
+    let mut children = vec![];
+    for f in functions_to_analyze {
+        let f = f.clone();
+        children.push(thread::spawn(move || analyze_and_save_results(bc_dir, &f)));
+    }
+    for child in children {
+        // Wait for the thread to finish. Returns a result.
+        let _ = child.join();
     }
     Ok(())
 }
