@@ -1,7 +1,8 @@
 use glob::glob;
 use haybale::backend::*;
 use haybale::*;
-use std::process::Command;
+use std::fs::File;
+use std::io::prelude::*;
 use std::result::Result;
 use std::string::String;
 use std::thread;
@@ -55,7 +56,7 @@ pub fn find_longest_path<'p>(
     funcname: &str,
     project: &'p Project,
     config: Config<'p, DefaultBackend>,
-) -> Option<(usize, State<'p, DefaultBackend>)> {
+) -> Result<(usize, State<'p, DefaultBackend>), String> {
     let mut em: ExecutionManager<DefaultBackend> = symex_function(funcname, project, config);
     //TODO: Following code could probably be more functional
     let mut longest_path_len = 0;
@@ -67,7 +68,7 @@ pub fn find_longest_path<'p>(
                     println!("next() worked");
                 }
                 Err(e) => {
-                    panic!(em.state().full_error_message_with_context(e));
+                    return Err(em.state().full_error_message_with_context(e));
                 }
             },
             None => break,
@@ -80,7 +81,9 @@ pub fn find_longest_path<'p>(
             longest_path_state = Some(state.clone());
         }
     }
-    longest_path_state.map_or(None, |state| Some((longest_path_len, state)))
+    longest_path_state.map_or(Err("No Paths found".to_string()), |state| {
+        Ok((longest_path_len, state))
+    })
 }
 
 enum KernelWorkType {
@@ -126,7 +129,11 @@ fn retrieve_functions_for_analysis<'p>(
 /// will symbolically execute the passed function, and write the results to a file.
 /// This is useful for performing multiple symbolic executions simultaneously,
 /// especially because each execution is single threaded.
-fn analyze_and_save_results(bc_dir: &str, func_name: &str) -> Result<(), String> {
+fn analyze_and_save_results(
+    bc_dir: &str,
+    board_path_str: &str,
+    func_name: &str,
+) -> Result<(), String> {
     let glob2 = "/**/*.bc";
     let paths = glob(&[bc_dir, glob2].concat()).unwrap().map(|x| x.unwrap());
     let project = Project::from_bc_paths(paths)?;
@@ -138,12 +145,24 @@ fn analyze_and_save_results(bc_dir: &str, func_name: &str) -> Result<(), String>
     config
         .function_hooks
         .add_rust_demangled("kernel::debug::panic", &function_hooks::abort_hook);
-    if let Some((len, state)) = find_longest_path(func_name, &project, config) {
-        println!("len: {}", len);
-    //println!("{}", state.pretty_path_source());
-    //print_instrs(state.get_path());
-    } else {
-        panic!("No paths found");
+    let board_name = board_path_str
+        .get(board_path_str.rfind('/').unwrap() + 1..)
+        .unwrap();
+    let demangled = rustc_demangle::demangle(func_name).to_string();
+    let filename = "results_".to_owned() + board_name + "_" + &demangled + ".txt";
+    println!("{:?}", filename);
+    let mut file = File::create(filename).unwrap();
+    match find_longest_path(func_name, &project, config) {
+        Ok((len, state)) => {
+            println!("len: {}", len);
+            let data = "len: ".to_owned() + &len.to_string() + "";
+            file.write_all(data.as_bytes()).unwrap();
+            //println!("{}", state.pretty_path_source());
+            //print_instrs(state.get_path());
+        }
+        Err(e) => {
+            file.write_all(e.as_bytes()).unwrap();
+        }
     }
     Ok(())
 }
@@ -156,8 +175,9 @@ fn main() -> Result<(), String> {
 
     // set to board to be evaluated. Currently, not all tock boards are supported.
     // TODO: Fix below to not use rust version of haybale crate (may need build.rs)
-    //let board_path_str = "tock/boards/redboard_artemis_nano".to_owned();
-    /*let output1 = Command::new("sh")
+    let board_path_str = "tock/boards/redboard_artemis_nano";
+    /*use std::process::Command;
+    let output1 = Command::new("sh")
         .arg("-c")
         .arg(
             "exec bash -l cd ".to_owned()
@@ -226,10 +246,15 @@ fn main() -> Result<(), String> {
     //let func_name = &allow_syscalls.nth(5).unwrap().0.name.clone(); //console, fails
 
     functions_to_analyze.push(func_name);
+    functions_to_analyze.extend(allow_syscalls.map(|(f, _m)| &f.name));
+    functions_to_analyze.extend(command_syscalls.map(|(f, _m)| &f.name));
+    functions_to_analyze.extend(subscribe_syscalls.map(|(f, _m)| &f.name));
     let mut children = vec![];
     for f in functions_to_analyze {
         let f = f.clone();
-        children.push(thread::spawn(move || analyze_and_save_results(bc_dir, &f)));
+        children.push(thread::spawn(move || {
+            analyze_and_save_results(bc_dir, board_path_str, &f)
+        }));
     }
     for child in children {
         // Wait for the thread to finish. Returns a result.
