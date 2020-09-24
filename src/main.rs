@@ -104,6 +104,7 @@ fn retrieve_functions_for_analysis<'p>(
     // false positives
     //let demangled = rustc_demangle::demangle(func_name);
     match kind {
+        // TODO: Allow handle_xx_interrupt pattern as well
         KernelWorkType::InterruptHandlers => Box::new(
             project
                 .all_functions()
@@ -175,7 +176,7 @@ fn main() -> Result<(), String> {
 
     // set to board to be evaluated. Currently, not all tock boards are supported.
     // TODO: Fix below to not use rust version of haybale crate (may need build.rs)
-    let board_path_str = "tock/boards/redboard_artemis_nano";
+    let board_path_str = "tock/boards/opentitan";
     /*use std::process::Command;
     let output1 = Command::new("sh")
         .arg("-c")
@@ -196,9 +197,10 @@ fn main() -> Result<(), String> {
     println!("{}", String::from_utf8(output2.stderr).unwrap());
     */
 
-    // For now, assume target under analysis is thumbv7em architecture,
-    // and located in the tock submodule of this crate
-    let bc_dir = "tock/target/thumbv7em-none-eabi/release/deps/";
+    // For now, assume target under analysis,
+    // located in the tock submodule of this crate
+    //let bc_dir = "tock/target/thumbv7em-none-eabi/release/deps/";
+    let bc_dir = "tock/target/riscv32imc-unknown-none-elf/release/deps/";
 
     // Make a vector to hold the children which are spawned.
     let mut functions_to_analyze = vec![];
@@ -225,7 +227,7 @@ fn main() -> Result<(), String> {
     //let func_name = &command_syscalls.nth(4).unwrap().0.name.clone(); //ble, fails
     //let func_name = &command_syscalls.nth(5).unwrap().0.name.clone(); //console, fails
 
-    let mut subscribe_syscalls =
+    let subscribe_syscalls =
         retrieve_functions_for_analysis(&project, KernelWorkType::SubscribeSyscalls);
     // comments at end indicate which function this corresponds to on the apollo3
     //let func_name = &subscribe_syscalls.nth(0).unwrap().0.name.clone(); //dummy impl, 4
@@ -235,8 +237,7 @@ fn main() -> Result<(), String> {
     //let func_name = &subscribe_syscalls.nth(4).unwrap().0.name.clone(); //ble
     //let func_name = &subscribe_syscalls.nth(5).unwrap().0.name.clone(); //console
 
-    let mut allow_syscalls =
-        retrieve_functions_for_analysis(&project, KernelWorkType::AllowSyscalls);
+    let allow_syscalls = retrieve_functions_for_analysis(&project, KernelWorkType::AllowSyscalls);
 
     //let func_name = &allow_syscalls.nth(0).unwrap().0.name.clone(); //default
     //let func_name = &allow_syscalls.nth(1).unwrap().0.name.clone(); //also default??
@@ -245,10 +246,13 @@ fn main() -> Result<(), String> {
     //let func_name = &allow_syscalls.nth(4).unwrap().0.name.clone(); //ble, fails
     //let func_name = &allow_syscalls.nth(5).unwrap().0.name.clone(); //console, fails
 
-    functions_to_analyze.push(func_name);
+    let interrupt_handlers =
+        retrieve_functions_for_analysis(&project, KernelWorkType::InterruptHandlers);
+
     functions_to_analyze.extend(allow_syscalls.map(|(f, _m)| &f.name));
     functions_to_analyze.extend(command_syscalls.map(|(f, _m)| &f.name));
     functions_to_analyze.extend(subscribe_syscalls.map(|(f, _m)| &f.name));
+    functions_to_analyze.extend(interrupt_handlers.map(|(f, _m)| &f.name));
     let mut children = vec![];
     for f in functions_to_analyze {
         let f = f.clone();
