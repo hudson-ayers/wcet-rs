@@ -11,7 +11,8 @@ extern crate log;
 extern crate simple_logger;
 
 /// Print all LLVM IR instructions in a given symbolic execution
-pub fn print_instrs<'p>(path: &Vec<PathEntry<'p>>) {
+pub fn print_instrs<'p>(path: &Vec<PathEntry<'p>>) -> String {
+    let mut ret = String::new();
     for entry in path {
         let location = &entry.0;
         // TODO: Below assumes terminator is not an instruction, not totally clear on how this
@@ -19,12 +20,13 @@ pub fn print_instrs<'p>(path: &Vec<PathEntry<'p>>) {
         match location.instr {
             BBInstrIndex::Instr(idx) => {
                 for instr in location.bb.instrs.iter().skip(idx) {
-                    println!("instruction: {:?}", instr);
+                    ret += &format!("{:?}\n", instr);
                 }
             }
             BBInstrIndex::Terminator => println!("Terminator."),
         }
     }
+    ret
 }
 
 /// Returns the number of LLVM instructions in this path.
@@ -57,7 +59,8 @@ pub fn find_longest_path<'p>(
     project: &'p Project,
     config: Config<'p, DefaultBackend>,
 ) -> Result<(usize, State<'p, DefaultBackend>), String> {
-    let mut em: ExecutionManager<DefaultBackend> = symex_function(funcname, project, config);
+    let mut em: ExecutionManager<DefaultBackend> =
+        symex_function(funcname, project, config, None).unwrap();
     //TODO: Following code could probably be more functional
     let mut longest_path_len = 0;
     let mut longest_path_state = None;
@@ -156,7 +159,14 @@ fn analyze_and_save_results(
     match find_longest_path(func_name, &project, config) {
         Ok((len, state)) => {
             println!("len: {}", len);
-            let data = "len: ".to_owned() + &len.to_string() + "";
+            let data = "len: ".to_owned()
+                + &len.to_string()
+                + ""
+                + &state.pretty_path_llvm()
+                + "\n"
+                + &state.pretty_path_source()
+                + "\n"
+                + &print_instrs(state.get_path());
             file.write_all(data.as_bytes()).unwrap();
             //println!("{}", state.pretty_path_source());
             //print_instrs(state.get_path());
@@ -176,7 +186,7 @@ fn main() -> Result<(), String> {
 
     // set to board to be evaluated. Currently, not all tock boards are supported.
     // TODO: Fix below to not use rust version of haybale crate (may need build.rs)
-    let board_path_str = "tock/boards/opentitan";
+    let board_path_str = "tock/boards/apollo32";
     /*use std::process::Command;
     let output1 = Command::new("sh")
         .arg("-c")
@@ -199,8 +209,8 @@ fn main() -> Result<(), String> {
 
     // For now, assume target under analysis,
     // located in the tock submodule of this crate
-    //let bc_dir = "tock/target/thumbv7em-none-eabi/release/deps/";
-    let bc_dir = "tock/target/riscv32imc-unknown-none-elf/release/deps/";
+    let bc_dir = "tock/target/thumbv7em-none-eabi/release/deps/";
+    //let bc_dir = "tock/target/riscv32imc-unknown-none-elf/release/deps/";
 
     // Make a vector to hold the children which are spawned.
     let mut functions_to_analyze = vec![];
@@ -249,9 +259,9 @@ fn main() -> Result<(), String> {
     let interrupt_handlers =
         retrieve_functions_for_analysis(&project, KernelWorkType::InterruptHandlers);
 
-    functions_to_analyze.extend(allow_syscalls.map(|(f, _m)| &f.name));
-    functions_to_analyze.extend(command_syscalls.map(|(f, _m)| &f.name));
-    functions_to_analyze.extend(subscribe_syscalls.map(|(f, _m)| &f.name));
+    //functions_to_analyze.extend(allow_syscalls.map(|(f, _m)| &f.name));
+    //functions_to_analyze.extend(command_syscalls.map(|(f, _m)| &f.name));
+    //functions_to_analyze.extend(subscribe_syscalls.map(|(f, _m)| &f.name));
     functions_to_analyze.extend(interrupt_handlers.map(|(f, _m)| &f.name));
     let mut children = vec![];
     for f in functions_to_analyze {

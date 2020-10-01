@@ -12,7 +12,7 @@ log = "0.4.11"
 rustc-demangle = "0.1.16"
 
 [dependencies.haybale]
-#git = "https://github.com/hudson-ayers/haybale"
-#branch = "trait_obj_support"
-path = "../../../code_repos/haybale" # comment in when testing local haybale development
+git = "https://github.com/hudson-ayers/haybale"
+branch = "trait_obj_support"
+#path = "../../../code_repos/haybale" # comment in when testing local haybale development
 features = ["llvm-10"] # Need to match LLVM version used by rust version under test
