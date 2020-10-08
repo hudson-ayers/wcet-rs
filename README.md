@@ -3,6 +3,8 @@
 This repository contains code that uses a modified version of the Haybale symbolic execution
 engine to find longest paths (in LLVM IR) through Rust code.
 
+## Status
+
 The code currently in this repository is rough research code, and has only been tested on a fork
 of Tock that modifies the build system to generate the necessary LLVM IR and MIR files. This Tock
 fork also contains some modifications to the Tock kernel necessary to bound symbolic execution. In general,
@@ -11,7 +13,7 @@ information to the compiler (such as communicating loop bounds via assert statem
 is contained in a git submodule of this repository, as Tock uses a non-Cargo based build system and is not
 published as a crate.
 
-This code also uses a fork of Haybale that adds Rust-specific symbolic execution support,
+This code uses a fork of Haybale that adds Rust-specific symbolic execution support,
 allowing this tool to effectively handle code with dynamic dispatch of trait method calls.
 This fork also makes some assumptions that are true for Tock, but not true for all Rust code:
 
@@ -30,3 +32,29 @@ find longest paths for all system calls and interrupt handlers. Deriving actual 
 these longest paths requires additional tooling, such as verilator or a mechanism for converting LLVM IR
 to platform-specific assembly, and using published instruction timing for that assembly. Currently, this
 is future work.
+
+## Installation + Setup
+
+Using this tool requires installing several system packages which are necessary for Haybale - specifically
+a shared library version of boolector-sys and a shared library version of llvm-sys.
+
+Next, you must enter the tock submodule, and run `make` in the directory of the board you want to analyze.
+This may require additional installation steps, see the README of the Tock repository for additional information
+if `make` fails.
+This tool has been tested on the following boards:
+- Imix
+- Hail
+- Nordic Boards (nrf52840dk, etc.)
+- OpenTitan
+- Redboard Artemis Nano (simplest, good for getting started)
+
+Depending what board you select, modify `main.rs` so that the `bc_dir` variable contains the location of the target folder. Generally,
+for ARM boards the correct path is the one containing "thumbv7em-none-eabi", and for RISCV boards the correct
+path is the one containing riscv32-imc.
+
+Next, modify `main.rs` such that the `functions_to_analyze` vector contains a list of the names of all functions you want
+to find longest paths for. The `retrieve_functions_for_analysis()` function can be useful for isolating certain system calls
+or interrupt handlers for analysis.
+
+Finally, run the tool using `cargo run`. The results for each function will placed in a different text file in the root of the directory.
+For runs that fail, the results file will contain the error that led to the failure.
