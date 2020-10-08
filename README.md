@@ -36,7 +36,22 @@ is future work.
 ## Installation + Setup
 
 Using this tool requires installing several system packages which are necessary for Haybale - specifically
-a shared library version of boolector-sys and a shared library version of llvm-sys.
+a shared library version of boolector-sys and a shared library version of llvm-sys. Instructions for installing
+boolector can be found here: https://github.com/boolector/boolector. However, boolector-sys requires that it be installed
+as a shared library, so make sure to pass the `--shared` flag to `./configure.sh`. Don't worry about building with Python
+bindings. Also, you need to run `make install` after running `make`, and need to run `sudo ldconfig` after installing.
+
+Instructions for installing LLVM can be found here: https://gitlab.com/taricorp/llvm-sys.rs ,
+but they are pretty confusing, so here are some instructions that worked for me on Ubuntu 20.04:
+
+```bash
+wget https://apt.llvm.org/llvm.sh
+chmod +x llvm.sh
+sudo ./llvm.sh 10
+sudo apt install zlib1g-dev
+sudo ldconfig
+```
+(there may be additional packages you need to install).
 
 Next, you must enter the tock submodule, and run `make` in the directory of the board you want to analyze.
 This may require additional installation steps, see the README of the Tock repository for additional information
