@@ -53,7 +53,8 @@ sudo ldconfig
 ```
 (there may be additional packages you need to install).
 
-Next, you must enter the tock submodule, and run `make` in the directory of the board you want to analyze.
+This tool will automatically build the Tock board you want to analyze. However, if building fails,
+you must enter the tock submodule, and run `make` in the directory of the board you want to analyze.
 This may require additional installation steps, see the README of the Tock repository for additional information
 if `make` fails.
 This tool has been tested on the following boards:
@@ -63,13 +64,10 @@ This tool has been tested on the following boards:
 - OpenTitan
 - Redboard Artemis Nano (simplest, good for getting started)
 
-Depending what board you select, modify `main.rs` so that the `bc_dir` variable contains the location of the target folder. Generally,
-for ARM boards the correct path is the one containing "thumbv7em-none-eabi", and for RISCV boards the correct
-path is the one containing riscv32-imc.
+If you are analyzing a board not present in the upstream Tock repository, you may need to manually
+set the target directory so that the tool can find the LLVM bitcode.
 
-Next, modify `main.rs` such that the `functions_to_analyze` vector contains a list of the names of all functions you want
-to find longest paths for. The `retrieve_functions_for_analysis()` function can be useful for isolating certain system calls
-or interrupt handlers for analysis.
+You can choose a set of functions for analysis using the command line options to this tool.
 
-Finally, run the tool using `cargo run`. The results for each function will placed in a different text file in the root of the directory.
+Finally, run the tool using `cargo run -- <options>`. The results for each function will placed in a different text file in the root of the directory.
 For runs that fail, the results file will contain the error that led to the failure.
