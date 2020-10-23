@@ -1,5 +1,6 @@
 use clap::arg_enum;
-use glob::glob; use haybale::backend::*;
+use glob::glob;
+use haybale::backend::*;
 use haybale::*;
 use simple_logger::SimpleLogger;
 use std::collections::HashMap;
