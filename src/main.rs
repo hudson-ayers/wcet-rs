@@ -1,14 +1,17 @@
-use glob::glob;
-use haybale::backend::*;
+use clap::arg_enum;
+use glob::glob; use haybale::backend::*;
 use haybale::*;
+use simple_logger::SimpleLogger;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
 use std::result::Result;
 use std::string::String;
+use std::sync::{Arc, Mutex};
 use std::thread;
+use structopt::StructOpt;
 
 extern crate log;
-extern crate simple_logger;
 
 /// Print all LLVM IR instructions in a given symbolic execution
 pub fn print_instrs<'p>(path: &Vec<PathEntry<'p>>) -> String {
@@ -89,12 +92,16 @@ pub fn find_longest_path<'p>(
     })
 }
 
-enum KernelWorkType {
-    InterruptHandlers,
-    CommandSyscalls,
-    SubscribeSyscalls,
-    AllowSyscalls,
-    MemopSyscall,
+arg_enum! {
+    #[derive(Debug)]
+    enum KernelWorkType {
+        Interrupts,
+        Commands,
+        Subscribes,
+        Allows,
+        Memops,
+        All,
+    }
 }
 
 /// Function for retrieving the types of Tock functions which this tool is capable of profiling,
@@ -108,24 +115,46 @@ fn retrieve_functions_for_analysis<'p>(
     //let demangled = rustc_demangle::demangle(func_name);
     match kind {
         // TODO: Allow handle_xx_interrupt pattern as well
-        KernelWorkType::InterruptHandlers => Box::new(
+        KernelWorkType::Interrupts => Box::new(
             project
                 .all_functions()
                 .filter(|(f, _m)| f.name.contains("handle_interrupt")),
         ),
-        KernelWorkType::CommandSyscalls => Box::new(project.all_functions().filter(|(f, _m)| {
+        KernelWorkType::Commands => Box::new(project.all_functions().filter(|(f, _m)| {
             f.name.contains("command")
                 && f.name.contains("Driver")
-                && !f.name.contains("closure")
-                && !f.name.contains("command_complete")
+                && !f.name.contains("closure") //manual exclusion
+                && !f.name.contains("command_complete") //manual exclusion
         })),
-        KernelWorkType::AllowSyscalls => Box::new(project.all_functions().filter(|(f, _m)| {
+        KernelWorkType::Allows => Box::new(project.all_functions().filter(|(f, _m)| {
             f.name.contains("allow") && f.name.contains("Driver") && !f.name.contains("closure")
         })),
-        KernelWorkType::SubscribeSyscalls => Box::new(project.all_functions().filter(|(f, _m)| {
+        KernelWorkType::Subscribes => Box::new(project.all_functions().filter(|(f, _m)| {
             f.name.contains("subscribe") && f.name.contains("Driver") && !f.name.contains("closure")
         })),
-        KernelWorkType::MemopSyscall => panic!("Memop support not yet implemented"),
+        KernelWorkType::Memops => panic!("Memop support not yet implemented"),
+        KernelWorkType::All => {
+            let command_syscalls =
+                retrieve_functions_for_analysis(&project, KernelWorkType::Commands);
+
+            let subscribe_syscalls =
+                retrieve_functions_for_analysis(&project, KernelWorkType::Subscribes);
+            let allow_syscalls = retrieve_functions_for_analysis(&project, KernelWorkType::Allows);
+
+            let interrupt_handlers =
+                retrieve_functions_for_analysis(&project, KernelWorkType::Interrupts);
+            Box::new(
+                command_syscalls
+                    .chain(subscribe_syscalls)
+                    .chain(allow_syscalls)
+                    .chain(interrupt_handlers),
+            )
+
+            //functions_to_analyze.extend(allow_syscalls.map(|(f, _m)| &f.name));
+            //functions_to_analyze.extend(command_syscalls.map(|(f, _m)| &f.name));
+            //functions_to_analyze.extend(subscribe_syscalls.map(|(f, _m)| &f.name));
+            //functions_to_analyze.extend(interrupt_handlers.map(|(f, _m)| &f.name));
+        }
     }
 }
 
@@ -137,15 +166,17 @@ fn analyze_and_save_results(
     bc_dir: &str,
     board_path_str: &str,
     func_name: &str,
-) -> Result<(), String> {
-    let glob2 = "/**/*.bc";
-    let paths = glob(&[bc_dir, glob2].concat()).unwrap().map(|x| x.unwrap());
+    timeout_s: u64,
+) -> Result<String, String> {
+    let paths = glob(&[bc_dir, "/**/*.bc"].concat())
+        .unwrap()
+        .map(|x| x.unwrap());
     let project = Project::from_bc_paths(paths)?;
 
     let mut config: Config<DefaultBackend> = Config::default();
     config.null_pointer_checking = config::NullPointerChecking::None; // In the Tock kernel, we trust that Rust safety mechanisms prevent null pointer dereferences.
     config.loop_bound = 50; // default is 10, raise if larger loops exist
-    config.solver_query_timeout = Some(std::time::Duration::new(100, 0)); // extend query timeout
+    config.solver_query_timeout = Some(std::time::Duration::new(timeout_s, 0)); // extend query timeout
     config
         .function_hooks
         .add_rust_demangled("kernel::debug::panic", &function_hooks::abort_hook);
@@ -153,10 +184,10 @@ fn analyze_and_save_results(
         .get(board_path_str.rfind('/').unwrap() + 1..)
         .unwrap();
     let demangled = rustc_demangle::demangle(func_name).to_string();
-    let filename = "results_".to_owned() + board_name + "_" + &demangled + ".txt";
+    let filename = "results/".to_owned() + board_name + "/" + &demangled + ".txt";
     println!("{:?}", filename);
     let mut file = File::create(filename).unwrap();
-    match find_longest_path(func_name, &project, config) {
+    let ret = match find_longest_path(func_name, &project, config) {
         Ok((len, state)) => {
             println!("len: {}", len);
             let data = "len: ".to_owned()
@@ -170,110 +201,143 @@ fn analyze_and_save_results(
             file.write_all(data.as_bytes()).unwrap();
             //println!("{}", state.pretty_path_source());
             //print_instrs(state.get_path());
+            Ok(len.to_string())
         }
         Err(e) => {
             file.write_all(e.as_bytes()).unwrap();
+            Err("Fail".to_string())
         }
-    }
-    Ok(())
+    };
+    ret
+}
+
+#[derive(StructOpt, Debug)]
+#[structopt(name = "basic")]
+struct Opt {
+    /// Activate debug mode
+    #[structopt(short, long)]
+    debug: bool,
+
+    /// Verbose mode (-v, -vv, -vvv, etc.)
+    #[structopt(short, long, parse(from_occurrences))]
+    verbose: u8,
+
+    /// Timeout passed to Haybale runs (in seconds)
+    #[structopt(short, long, default_value = "100")]
+    timeout: u64,
+
+    /// Name of the tock board to analyze
+    #[structopt(short, long, default_value = "redboard_artemis_nano")]
+    board: String,
+    
+    #[structopt(short = "i", long, default_value = "0")]
+    function_index: usize,
+
+    /// Types of function for which to find longest path
+    #[structopt(possible_values = &KernelWorkType::variants(), case_insensitive = true, default_value = "all")]
+    functions: KernelWorkType,
+    
+    
 }
 
 fn main() -> Result<(), String> {
-    // comment in to enable logs in Haybale. Useful for debugging
-    // but dramatically slow down executions and increase memory use.
-    // generally, should be first line of main if included.
-    //simple_logger::init().unwrap();
+    let opt = Opt::from_args(); // get CLI inputs
+
+    if opt.verbose >= 1 {
+        // Enable logs in Haybale. Useful for debugging
+        // but dramatically slow down executions and increase memory use.
+        // generally, should be first line of main if included.
+        SimpleLogger::new().init().unwrap();
+    }
 
     // set to board to be evaluated. Currently, not all tock boards are supported.
-    // TODO: Fix below to not use rust version of haybale crate (may need build.rs)
-    let board_path_str = "tock/boards/redboard_artemis_nano";
-    /*use std::process::Command;
-    let output1 = Command::new("sh")
-        .arg("-c")
-        .arg(
-            "exec bash -l cd ".to_owned()
-                + &board_path_str
-                + &" && source ~/.bashrc && make clean && make",
-        )
-        .output()
-        .expect("failed to execute process");
-    println!("{}", String::from_utf8(output1.stderr).unwrap());
+    // This works because this crate uses the same rust toolchain as Tock.
+    let board_path_str = "tock/boards/".to_string() + &opt.board;
+    println!("Compiling {:?}, please wait...", board_path_str);
 
-    let output2 = Command::new("make")
+    use std::process::Command;
+    assert!(Command::new("make")
+        .arg("-C")
+        .arg(&board_path_str)
+        .arg("clean")
+        .output()
+        .expect("failed to execute make clean")
+        .status
+        .success());
+    let output = Command::new("make")
         .arg("-C")
         .arg(&board_path_str)
         .output()
-        .expect("failed to execute process");
-    println!("{}", String::from_utf8(output2.stderr).unwrap());
-    */
+        .expect("failed to execute make");
+    assert!(output.status.success());
+    let str_output = String::from_utf8(output.stderr).unwrap();
+    if !str_output.contains("Finished release") {
+        panic!("Build failed, output: {}", str_output);
+    }
 
-    // For now, assume target under analysis,
-    // located in the tock submodule of this crate
-    let bc_dir = "tock/target/thumbv7em-none-eabi/release/deps/";
-    //let bc_dir = "tock/target/riscv32imc-unknown-none-elf/release/deps/";
+    // For now, assume target under analysis, located in the tock submodule of this crate.
+    // Assume it is a thumbv7 target unless it is one of three whitelisted riscv targets.
 
-    // Make a vector to hold the children which are spawned.
-    let mut functions_to_analyze = vec![];
+    let bc_dir = if board_path_str.contains("opentitan")
+        || board_path_str.contains("arty_e21")
+        || board_path_str.contains("hifive1")
+    {
+        "tock/target/riscv32imc-unknown-none-elf/release/deps/"
+    } else {
+        "tock/target/thumbv7em-none-eabi/release/deps/"
+    };
 
-    //begin list of all interrupts for apollo3 board/chip:
-
-    //let func_name = "apollo3::stimer::STimer::handle_interrupt";
-    //let func_name = "apollo3::iom::Iom::handle_interrupt";
-    //let func_name = "apollo3::uart::Uart::handle_interrupt";
-    //let func_name = "apollo3::ble::Ble::handle_interrupt";
-    //let func_name = "apollo3::gpio::Port::handle_interrupt";
-
-    let glob2 = "/**/*.bc";
-    let paths = glob(&[bc_dir, glob2].concat()).unwrap().map(|x| x.unwrap());
+    let paths = glob(&[bc_dir, "/**/*.bc"].concat())
+        .unwrap()
+        .map(|x| x.unwrap());
     let project = Project::from_bc_paths(paths)?;
 
-    let mut command_syscalls =
-        retrieve_functions_for_analysis(&project, KernelWorkType::CommandSyscalls);
-    // let func_name = &command_syscalls.nth(0).unwrap().0.name.clone(); //led
-
-    //let func_name = &command_syscalls.nth(1).unwrap().0.name.clone(); //gpio
-    //let func_name = &command_syscalls.nth(2).unwrap().0.name.clone(); // alarm, fails
-    //let func_name = &command_syscalls.nth(3).unwrap().0.name.clone(); // i2c, fails bc panic
-    //let func_name = &command_syscalls.nth(4).unwrap().0.name.clone(); //ble, fails
-    //let func_name = &command_syscalls.nth(5).unwrap().0.name.clone(); //console, fails
-
-    let subscribe_syscalls =
-        retrieve_functions_for_analysis(&project, KernelWorkType::SubscribeSyscalls);
-    // comments at end indicate which function this corresponds to on the apollo3
-    //let func_name = &subscribe_syscalls.nth(0).unwrap().0.name.clone(); //dummy impl, 4
-    //let func_name = &subscribe_syscalls.nth(1).unwrap().0.name.clone(); //gpio
-    //let func_name = &subscribe_syscalls.nth(2).unwrap().0.name.clone(); //alarm
-    //let func_name = &subscribe_syscalls.nth(3).unwrap().0.name.clone(); //i2c
-    //let func_name = &subscribe_syscalls.nth(4).unwrap().0.name.clone(); //ble
-    //let func_name = &subscribe_syscalls.nth(5).unwrap().0.name.clone(); //console
-
-    let allow_syscalls = retrieve_functions_for_analysis(&project, KernelWorkType::AllowSyscalls);
-
-    //let func_name = &allow_syscalls.nth(0).unwrap().0.name.clone(); //default
-    //let func_name = &allow_syscalls.nth(1).unwrap().0.name.clone(); //also default??
-    //let func_name = &allow_syscalls.nth(2).unwrap().0.name.clone(); //also default??
-    //let func_name = &allow_syscalls.nth(3).unwrap().0.name.clone(); //i2c
-    //let func_name = &allow_syscalls.nth(4).unwrap().0.name.clone(); //ble, fails
-    //let func_name = &allow_syscalls.nth(5).unwrap().0.name.clone(); //console, fails
-
-    let mut interrupt_handlers =
-        retrieve_functions_for_analysis(&project, KernelWorkType::InterruptHandlers);
-    let func_name = &interrupt_handlers.nth(1).unwrap().0.name.clone();
-
-    // println!("{}", &interrupt_handlers.map(|(f, _m)| &f.name).fold(String::new(), |a, b| a + b +" "));
-    functions_to_analyze.push(func_name);
-    //functions_to_analyze.extend(interrupt_handlers.map(|(f, _m)| &f.name));
+    let mut functions_to_analyze = vec![];
+    let mut func_name_iter = retrieve_functions_for_analysis(&project, opt.functions);
+    if opt.function_index == 0 {
+        functions_to_analyze.extend(func_name_iter.map(|(f, _m)| &f.name));
+    } else {
+       functions_to_analyze.push(&func_name_iter.nth(opt.function_index - 1).unwrap().0.name);
+    }
 
     let mut children = vec![];
+    let all_results = Mutex::new(HashMap::new());
+    let arc = Arc::new(all_results);
+    let timeout = opt.timeout;
     for f in functions_to_analyze {
         let f = f.clone();
+        let arc = arc.clone();
+        let name = board_path_str.clone();
         children.push(thread::spawn(move || {
-            analyze_and_save_results(bc_dir, board_path_str, &f)
+            match analyze_and_save_results(bc_dir, &name, &f, timeout) {
+                Ok(s) => {
+                    arc.lock().map_or((), |mut map| {
+                        map.insert(f, s);
+                    });
+                }
+                _ => {}
+            }
         }));
     }
     for child in children {
-        // Wait for the thread to finish. Returns a result.
         let _ = child.join();
     }
+    // Now, result of each thread is in all_results.
+    let filename = "results/".to_owned() + &opt.board + "/summary.txt";
+    println!("{:?}", filename);
+    let mut file = File::create(filename).unwrap();
+
+    let mut data = String::new();
+    let data = arc
+        .lock()
+        .map(|map| {
+            for (k, v) in map.iter() {
+                data = data + k + ": " + v;
+            }
+            data
+        })
+        .unwrap();
+    file.write_all(data.as_bytes()).unwrap();
+
     Ok(())
 }
