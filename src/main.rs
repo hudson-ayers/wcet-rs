@@ -186,7 +186,7 @@ fn main() -> Result<(), String> {
 
     // set to board to be evaluated. Currently, not all tock boards are supported.
     // TODO: Fix below to not use rust version of haybale crate (may need build.rs)
-    let board_path_str = "tock/boards/apollo32";
+    let board_path_str = "tock/boards/redboard_artemis_nano";
     /*use std::process::Command;
     let output1 = Command::new("sh")
         .arg("-c")
@@ -229,7 +229,7 @@ fn main() -> Result<(), String> {
 
     let mut command_syscalls =
         retrieve_functions_for_analysis(&project, KernelWorkType::CommandSyscalls);
-    let func_name = &command_syscalls.nth(0).unwrap().0.name.clone(); //led
+    // let func_name = &command_syscalls.nth(0).unwrap().0.name.clone(); //led
 
     //let func_name = &command_syscalls.nth(1).unwrap().0.name.clone(); //gpio
     //let func_name = &command_syscalls.nth(2).unwrap().0.name.clone(); // alarm, fails
@@ -256,13 +256,14 @@ fn main() -> Result<(), String> {
     //let func_name = &allow_syscalls.nth(4).unwrap().0.name.clone(); //ble, fails
     //let func_name = &allow_syscalls.nth(5).unwrap().0.name.clone(); //console, fails
 
-    let interrupt_handlers =
+    let mut interrupt_handlers =
         retrieve_functions_for_analysis(&project, KernelWorkType::InterruptHandlers);
+    let func_name = &interrupt_handlers.nth(1).unwrap().0.name.clone();
 
-    //functions_to_analyze.extend(allow_syscalls.map(|(f, _m)| &f.name));
-    //functions_to_analyze.extend(command_syscalls.map(|(f, _m)| &f.name));
-    //functions_to_analyze.extend(subscribe_syscalls.map(|(f, _m)| &f.name));
-    functions_to_analyze.extend(interrupt_handlers.map(|(f, _m)| &f.name));
+    // println!("{}", &interrupt_handlers.map(|(f, _m)| &f.name).fold(String::new(), |a, b| a + b +" "));
+    functions_to_analyze.push(func_name);
+    //functions_to_analyze.extend(interrupt_handlers.map(|(f, _m)| &f.name));
+
     let mut children = vec![];
     for f in functions_to_analyze {
         let f = f.clone();
