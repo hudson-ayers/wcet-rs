@@ -230,10 +230,15 @@ struct Opt {
     /// Name of the tock board to analyze
     #[structopt(short, long, default_value = "redboard_artemis_nano")]
     board: String,
+    
+    #[structopt(short = "i", long, default_value = "0")]
+    function_index: usize,
 
     /// Types of function for which to find longest path
     #[structopt(possible_values = &KernelWorkType::variants(), case_insensitive = true, default_value = "all")]
     functions: KernelWorkType,
+    
+    
 }
 
 fn main() -> Result<(), String> {
@@ -288,10 +293,13 @@ fn main() -> Result<(), String> {
         .map(|x| x.unwrap());
     let project = Project::from_bc_paths(paths)?;
 
-    // Make a vector to hold the children which are spawned.
     let mut functions_to_analyze = vec![];
-    let func_name_iter = retrieve_functions_for_analysis(&project, opt.functions);
-    functions_to_analyze.extend(func_name_iter.map(|(f, _m)| &f.name));
+    let mut func_name_iter = retrieve_functions_for_analysis(&project, opt.functions);
+    if opt.function_index == 0 {
+        functions_to_analyze.extend(func_name_iter.map(|(f, _m)| &f.name));
+    } else {
+       functions_to_analyze.push(&func_name_iter.nth(opt.function_index - 1).unwrap().0.name);
+    }
 
     let mut children = vec![];
     let all_results = Mutex::new(HashMap::new());
