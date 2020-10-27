@@ -187,7 +187,10 @@ fn analyze_and_save_results(
     let demangled = rustc_demangle::demangle(func_name).to_string();
     let filename = "results/".to_owned() + board_name + "/" + &demangled + ".txt";
     println!("{:?}", filename);
-    let mut file = File::create(filename).unwrap();
+    let path = std::path::Path::new(&filename);
+    let prefix = path.parent().unwrap();
+    std::fs::create_dir_all(prefix).unwrap();
+    let mut file = File::create(path).unwrap();
     let ret = match find_longest_path(func_name, &project, config) {
         Ok((len, state)) => {
             println!("len: {}", len);
@@ -230,15 +233,13 @@ struct Opt {
     /// Name of the tock board to analyze
     #[structopt(short, long, default_value = "redboard_artemis_nano")]
     board: String,
-    
+
     #[structopt(short = "i", long, default_value = "0")]
     function_index: usize,
 
     /// Types of function for which to find longest path
     #[structopt(possible_values = &KernelWorkType::variants(), case_insensitive = true, default_value = "all")]
     functions: KernelWorkType,
-    
-    
 }
 
 fn main() -> Result<(), String> {
@@ -298,7 +299,7 @@ fn main() -> Result<(), String> {
     if opt.function_index == 0 {
         functions_to_analyze.extend(func_name_iter.map(|(f, _m)| &f.name));
     } else {
-       functions_to_analyze.push(&func_name_iter.nth(opt.function_index - 1).unwrap().0.name);
+        functions_to_analyze.push(&func_name_iter.nth(opt.function_index - 1).unwrap().0.name);
     }
 
     let mut children = vec![];
