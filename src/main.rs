@@ -10,6 +10,7 @@ use std::result::Result;
 use std::string::String;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::vec::Vec;
 use structopt::StructOpt;
 
 extern crate log;
@@ -222,6 +223,10 @@ struct Opt {
     #[structopt(short, long)]
     debug: bool,
 
+    /// Pass this to skip recompiling the binary in the tock submodule
+    #[structopt(long)]
+    skip_compile: bool,
+
     /// Verbose mode (-v, -vv, -vvv, etc.)
     #[structopt(short, long, parse(from_occurrences))]
     verbose: u8,
@@ -236,6 +241,15 @@ struct Opt {
 
     #[structopt(short = "i", long, default_value = "0")]
     function_index: usize,
+
+    /// Pass components of a function name to run
+    /// only on a specific function containing all those components.
+    /// Use this argument multiple times to include multiple components,
+    /// e.g. '-c ble -c fired' to run on the first matched function containing
+    /// both "ble" and "fired"
+    /// Not compatible with function_index
+    #[structopt(short = "c", long)]
+    func_name_contains: Option<Vec<String>>,
 
     /// Types of function for which to find longest path
     #[structopt(possible_values = &KernelWorkType::variants(), case_insensitive = true, default_value = "all")]
@@ -255,26 +269,28 @@ fn main() -> Result<(), String> {
     // set to board to be evaluated. Currently, not all tock boards are supported.
     // This works because this crate uses the same rust toolchain as Tock.
     let board_path_str = "tock/boards/".to_string() + &opt.board;
-    println!("Compiling {:?}, please wait...", board_path_str);
+    if !opt.skip_compile {
+        println!("Compiling {:?}, please wait...", board_path_str);
 
-    use std::process::Command;
-    assert!(Command::new("make")
-        .arg("-C")
-        .arg(&board_path_str)
-        .arg("clean")
-        .output()
-        .expect("failed to execute make clean")
-        .status
-        .success());
-    let output = Command::new("make")
-        .arg("-C")
-        .arg(&board_path_str)
-        .output()
-        .expect("failed to execute make");
-    assert!(output.status.success());
-    let str_output = String::from_utf8(output.stderr).unwrap();
-    if !str_output.contains("Finished release") {
-        panic!("Build failed, output: {}", str_output);
+        use std::process::Command;
+        assert!(Command::new("make")
+            .arg("-C")
+            .arg(&board_path_str)
+            .arg("clean")
+            .output()
+            .expect("failed to execute make clean")
+            .status
+            .success());
+        let output = Command::new("make")
+            .arg("-C")
+            .arg(&board_path_str)
+            .output()
+            .expect("failed to execute make");
+        assert!(output.status.success());
+        let str_output = String::from_utf8(output.stderr).unwrap();
+        if !str_output.contains("Finished release") {
+            panic!("Build failed, output: {}", str_output);
+        }
     }
 
     // For now, assume target under analysis, located in the tock submodule of this crate.
@@ -296,7 +312,30 @@ fn main() -> Result<(), String> {
 
     let mut functions_to_analyze = vec![];
     let mut func_name_iter = retrieve_functions_for_analysis(&project, opt.functions);
-    if opt.function_index == 0 {
+    if opt.func_name_contains.is_some() {
+        let vec = opt.func_name_contains.unwrap().clone();
+        println!("func_name_contains: {:?}", vec);
+        let func_name = &project
+            .all_functions()
+            .filter(|(f, _m)| {
+                let demangled = rustc_demangle::demangle(&f.name);
+
+                let mut matched = true;
+                for s in vec.iter() {
+                    if !demangled.to_string().contains(s) {
+                        matched = false;
+                        break;
+                    }
+                }
+                matched
+            })
+            .next()
+            .unwrap()
+            .0
+            .name;
+        println!("Profiling {:?}", func_name);
+        functions_to_analyze.push(func_name);
+    } else if opt.function_index == 0 {
         functions_to_analyze.extend(func_name_iter.map(|(f, _m)| &f.name));
     } else {
         functions_to_analyze.push(&func_name_iter.nth(opt.function_index - 1).unwrap().0.name);
