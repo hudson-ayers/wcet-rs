@@ -1,3 +1,4 @@
 /target
+/results
 Cargo.lock
 results_*.txt
