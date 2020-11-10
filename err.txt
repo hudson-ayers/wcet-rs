@@ -1,0 +1,12 @@
+warning: unused variable: `timeout_s`
+   --> src/main.rs:169:5
+    |
+169 |     timeout_s: u64,
+    |     ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_timeout_s`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: 1 warning emitted
+
+    Finished dev [unoptimized + debuginfo] target(s) in 0.05s
+     Running `target/debug/wcet-rs -i 2 -t 100000 interrupts`

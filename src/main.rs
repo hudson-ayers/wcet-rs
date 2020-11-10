@@ -1,7 +1,6 @@
 use clap::arg_enum;
 use glob::glob;
-use haybale::backend::*;
-use haybale::*;
+use haybale::backend::*; use haybale::*;
 use simple_logger::SimpleLogger;
 use std::collections::HashMap;
 use std::fs::File;
@@ -176,8 +175,8 @@ fn analyze_and_save_results(
 
     let mut config: Config<DefaultBackend> = Config::default();
     config.null_pointer_checking = config::NullPointerChecking::None; // In the Tock kernel, we trust that Rust safety mechanisms prevent null pointer dereferences.
-    config.loop_bound = 50; // default is 10, raise if larger loops exist
-    config.solver_query_timeout = Some(std::time::Duration::new(timeout_s, 0)); // extend query timeout
+    config.loop_bound = 1000; // default is 10, raise if larger loops exist
+    config.solver_query_timeout = None; //Some(std::time::Duration::new(timeout_s, 0)); // extend query timeout
     config
         .function_hooks
         .add_rust_demangled("kernel::debug::panic", &function_hooks::abort_hook);
@@ -205,6 +204,7 @@ fn analyze_and_save_results(
             Ok(len.to_string())
         }
         Err(e) => {
+            println!("{}", e);
             file.write_all(e.as_bytes()).unwrap();
             Err("Fail".to_string())
         }
@@ -301,7 +301,9 @@ fn main() -> Result<(), String> {
        functions_to_analyze.push(&func_name_iter.nth(opt.function_index - 1).unwrap().0.name);
     }
 
+   // let mut ble = project.all_functions().filter(|(f, _m)| f.name.contains("ble") && f.name.contains("fired"));
     let mut children = vec![];
+    //functions_to_analyze.push(&ble.nth(0).unwrap().0.name);
     let all_results = Mutex::new(HashMap::new());
     let arc = Arc::new(all_results);
     let timeout = opt.timeout;
