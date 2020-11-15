@@ -209,6 +209,7 @@ fn analyze_and_save_results(
             Ok(len.to_string())
         }
         Err(e) => {
+            println!("failed: {:?}", e);
             file.write_all(e.as_bytes()).unwrap();
             Err("Fail".to_string())
         }
@@ -232,7 +233,7 @@ struct Opt {
     verbose: u8,
 
     /// Timeout passed to Haybale runs (in seconds)
-    #[structopt(short, long, default_value = "100")]
+    #[structopt(short, long, default_value = "500")]
     timeout: u64,
 
     /// Name of the tock board to analyze
@@ -373,7 +374,7 @@ fn main() -> Result<(), String> {
         .lock()
         .map(|map| {
             for (k, v) in map.iter() {
-                data = data + k + ": " + v;
+                data = data + k + ": " + v + "\n";
             }
             data
         })
