@@ -6,10 +6,12 @@ use simple_logger::SimpleLogger;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
+use std::process::{Command, Stdio};
 use std::result::Result;
 use std::string::String;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Instant;
 use std::vec::Vec;
 use structopt::StructOpt;
 
@@ -69,21 +71,34 @@ pub fn find_longest_path<'p>(
     //TODO: Following code could probably be more functional
     let mut longest_path_len = 0;
     let mut longest_path_state = None;
+    let mut i = 0;
     loop {
+        let start = Instant::now();
         match em.next() {
             Some(res) => match res {
                 Ok(_) => {
-                    println!("next() worked");
+                    print!(
+                        "Call to next() #{} completed in {} seconds ",
+                        i,
+                        start.elapsed().as_secs()
+                    );
                 }
                 Err(e) => {
+                    println!(
+                        "Call to next() # {} failed after {} seconds",
+                        i,
+                        start.elapsed().as_secs()
+                    );
                     return Err(em.state().full_error_message_with_context(e));
                 }
             },
             None => break,
         }
+        i += 1;
         let state = em.state();
         let path = state.get_path();
         let len = get_path_length(path);
+        println!("with a path length of {}", len);
         if len > longest_path_len {
             longest_path_len = len;
             longest_path_state = Some(state.clone());
@@ -169,6 +184,7 @@ fn analyze_and_save_results(
     board_path_str: &str,
     func_name: &str,
     timeout_s: u64,
+    resultspath: &str,
 ) -> Result<String, String> {
     let paths = glob(&[bc_dir, "/**/*.bc"].concat())
         .unwrap()
@@ -186,7 +202,7 @@ fn analyze_and_save_results(
         .get(board_path_str.rfind('/').unwrap() + 1..)
         .unwrap();
     let demangled = rustc_demangle::demangle(func_name).to_string();
-    let filename = "results/".to_owned() + board_name + "/" + &demangled + ".txt";
+    let filename = format!("{}/{}/{}.txt", resultspath, board_name, demangled);
     println!("{:?}", filename);
     let path = std::path::Path::new(&filename);
     let prefix = path.parent().unwrap();
@@ -209,8 +225,9 @@ fn analyze_and_save_results(
             Ok(len.to_string())
         }
         Err(e) => {
+            println!("{}", e);
             file.write_all(e.as_bytes()).unwrap();
-            Err("Fail".to_string())
+            Err("Fail: ".to_string() + &e)
         }
     };
     ret
@@ -239,6 +256,8 @@ struct Opt {
     #[structopt(short, long, default_value = "redboard_artemis_nano")]
     board: String,
 
+    /// Index of function, to run a specific function within
+    /// the function list
     #[structopt(short = "i", long, default_value = "0")]
     function_index: usize,
 
@@ -252,8 +271,20 @@ struct Opt {
     func_name_contains: Option<Vec<String>>,
 
     /// Types of function for which to find longest path
-    #[structopt(possible_values = &KernelWorkType::variants(), case_insensitive = true, default_value = "all")]
+    #[structopt(short, long, possible_values = &KernelWorkType::variants(), case_insensitive = true, default_value = "all")]
     functions: KernelWorkType,
+
+    #[structopt(short = "p", long = "tockpath", default_value = "tock")]
+    tockpath: String,
+
+    #[structopt(short = "r", long = "resultspath", default_value = "results")]
+    resultspath: String,
+
+    #[structopt(short = "g", long, default_value = "false")]
+    save_git_history: bool,
+
+    #[structopt(long = "time", default_value = false)]
+    time_results: bool,
 }
 
 fn main() -> Result<(), String> {
@@ -268,11 +299,10 @@ fn main() -> Result<(), String> {
 
     // set to board to be evaluated. Currently, not all tock boards are supported.
     // This works because this crate uses the same rust toolchain as Tock.
-    let board_path_str = "tock/boards/".to_string() + &opt.board;
+    let board_path_str = opt.tockpath.to_owned() + "/boards/" + &opt.board.to_owned();
     if !opt.skip_compile {
         println!("Compiling {:?}, please wait...", board_path_str);
 
-        use std::process::Command;
         assert!(Command::new("make")
             .arg("-C")
             .arg(&board_path_str)
@@ -293,19 +323,55 @@ fn main() -> Result<(), String> {
         }
     }
 
+    if !opt.save_git_history {
+        // Save current program state into a file, for reproducability later
+        // Uses git commands for this
+        let git_diff_filename = (&opt.resultspath).to_owned() + "/git_diff.txt";
+        let git_diff_file = File::create(git_diff_filename).unwrap();
+        assert!(Command::new("git")
+            .current_dir(opt.tockpath.to_owned())
+            .arg("diff")
+            .stdout(git_diff_file)
+            .status()
+            .expect("Failed to execute git diff")
+            .success());
+
+        // Do same thing for git log
+        let git_log_filename = (&opt.resultspath).to_owned() + "/git_log.txt";
+        let git_log_file = File::create(git_log_filename).unwrap();
+
+        let git_log_out = Command::new("git")
+            .current_dir(opt.tockpath.to_owned())
+            .arg("log")
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("Failed to execute git log")
+            .stdout
+            .expect("Failed to open log stdout");
+
+        assert!(Command::new("head")
+            .stdin(Stdio::from(git_log_out))
+            .stdout(git_log_file)
+            .arg("-n")
+            .arg("60")
+            .status()
+            .expect("Failed to execute head")
+            .success());
+    }
+
     // For now, assume target under analysis, located in the tock submodule of this crate.
     // Assume it is a thumbv7 target unless it is one of three whitelisted riscv targets.
+    let bc_dir: String = opt.tockpath.clone()
+        + if board_path_str.contains("opentitan")
+            || board_path_str.contains("arty_e21")
+            || board_path_str.contains("hifive1")
+        {
+            "/target/riscv32imc-unknown-none-elf/release/deps/"
+        } else {
+            "/target/thumbv7em-none-eabi/release/deps/"
+        };
 
-    let bc_dir = if board_path_str.contains("opentitan")
-        || board_path_str.contains("arty_e21")
-        || board_path_str.contains("hifive1")
-    {
-        "tock/target/riscv32imc-unknown-none-elf/release/deps/"
-    } else {
-        "tock/target/thumbv7em-none-eabi/release/deps/"
-    };
-
-    let paths = glob(&[bc_dir, "/**/*.bc"].concat())
+    let paths = glob(&[&bc_dir, "/**/*.bc"].concat())
         .unwrap()
         .map(|x| x.unwrap());
     let project = Project::from_bc_paths(paths)?;
@@ -345,26 +411,35 @@ fn main() -> Result<(), String> {
     let all_results = Mutex::new(HashMap::new());
     let arc = Arc::new(all_results);
     let timeout = opt.timeout;
+    let start = Instant::now();
     for f in functions_to_analyze {
         let f = f.clone();
         let arc = arc.clone();
         let name = board_path_str.clone();
+        let bc_dir_cpy = bc_dir.clone();
+        let resultspath = opt.resultspath.clone();
         children.push(thread::spawn(move || {
-            match analyze_and_save_results(bc_dir, &name, &f, timeout) {
+            match analyze_and_save_results(&bc_dir_cpy, &name, &f, timeout, &resultspath) {
                 Ok(s) => {
                     arc.lock().map_or((), |mut map| {
                         map.insert(f, s);
                     });
                 }
-                _ => {}
+                Err(e) => {
+                    arc.lock().map_or((), |mut map| {
+                        map.insert(f, e);
+                    });
+                }
             }
         }));
     }
+
+    let end = Instant::now();
     for child in children {
         let _ = child.join();
     }
     // Now, result of each thread is in all_results.
-    let filename = "results/".to_owned() + &opt.board + "/summary.txt";
+    let filename = (&opt.resultspath).to_owned() + "/" + &opt.board + "/summary.txt";
     println!("{:?}", filename);
     let mut file = File::create(filename).unwrap();
 
@@ -379,6 +454,16 @@ fn main() -> Result<(), String> {
         })
         .unwrap();
     file.write_all(data.as_bytes()).unwrap();
+
+    if !opt.time_results {
+        // Write how long the entire operation took
+        // This might go at board level instead, not sure
+        let time_filename = (&opt.resultspath).to_owned() + "/time.txt";
+        let mut time_file = File::create(time_filename).unwrap();
+        let total_duration = end.duration_since(start);
+        let duration_str = format!("Elapsed: {:?}", total_duration);
+        time_file.write_all(duration_str.as_bytes()).unwrap();
+    }
 
     Ok(())
 }
