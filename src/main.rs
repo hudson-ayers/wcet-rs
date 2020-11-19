@@ -1,18 +1,19 @@
 use clap::arg_enum;
 use glob::glob;
-use haybale::backend::*; use haybale::*;
+use haybale::backend::*;
+use haybale::*;
 use simple_logger::SimpleLogger;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
+use std::process::{Command, Stdio};
 use std::result::Result;
 use std::string::String;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Instant;
 use std::vec::Vec;
 use structopt::StructOpt;
-use std::time::Instant;
-use std::process::{Stdio, Command};
 
 extern crate log;
 
@@ -76,10 +77,18 @@ pub fn find_longest_path<'p>(
         match em.next() {
             Some(res) => match res {
                 Ok(_) => {
-                    print!("Call to next() #{} completed in {} seconds ", i, start.elapsed().as_secs());
+                    print!(
+                        "Call to next() #{} completed in {} seconds ",
+                        i,
+                        start.elapsed().as_secs()
+                    );
                 }
                 Err(e) => {
-                    println!("Call to next() # {} failed after {} seconds", i, start.elapsed().as_secs());
+                    println!(
+                        "Call to next() # {} failed after {} seconds",
+                        i,
+                        start.elapsed().as_secs()
+                    );
                     return Err(em.state().full_error_message_with_context(e));
                 }
             },
@@ -175,7 +184,7 @@ fn analyze_and_save_results(
     board_path_str: &str,
     func_name: &str,
     timeout_s: u64,
-    resultspath: &str
+    resultspath: &str,
 ) -> Result<String, String> {
     let paths = glob(&[bc_dir, "/**/*.bc"].concat())
         .unwrap()
@@ -184,7 +193,7 @@ fn analyze_and_save_results(
 
     let mut config: Config<DefaultBackend> = Config::default();
     config.null_pointer_checking = config::NullPointerChecking::None; // In the Tock kernel, we trust that Rust safety mechanisms prevent null pointer dereferences.
-    config.loop_bound = 1000; // default is 10, raise if larger loops exist
+    config.loop_bound = 50; // default is 10, raise if larger loops exist
     config.solver_query_timeout = Some(std::time::Duration::new(timeout_s, 0)); // extend query timeout
     config
         .function_hooks
@@ -247,7 +256,7 @@ struct Opt {
     #[structopt(short, long, default_value = "redboard_artemis_nano")]
     board: String,
 
-    /// Index of function, to run a specific function within 
+    /// Index of function, to run a specific function within
     /// the function list
     #[structopt(short = "i", long, default_value = "0")]
     function_index: usize,
@@ -266,10 +275,16 @@ struct Opt {
     functions: KernelWorkType,
 
     #[structopt(short = "p", long = "tockpath", default_value = "tock")]
-    tockpath: String, 
+    tockpath: String,
 
     #[structopt(short = "r", long = "resultspath", default_value = "results")]
-    resultspath: String
+    resultspath: String,
+
+    #[structopt(short = "g", long, default_value = "false")]
+    save_git_history: bool,
+
+    #[structopt(long = "time", default_value = false)]
+    time_results: bool,
 }
 
 fn main() -> Result<(), String> {
@@ -308,53 +323,53 @@ fn main() -> Result<(), String> {
         }
     }
 
-    // Save current program state into a file, for reproducability later
-    // Uses git commands for this
-    let git_diff_filename = (&opt.resultspath).to_owned() + "/git_diff.txt";
-    let git_diff_file = File::create(git_diff_filename).unwrap();
-    assert!(Command::new("git")
-        .current_dir(opt.tockpath.to_owned())
-        .arg("diff")
-        .stdout(git_diff_file)
-        .status()
-        .expect("Failed to execute git diff")
-        .success());
+    if !opt.save_git_history {
+        // Save current program state into a file, for reproducability later
+        // Uses git commands for this
+        let git_diff_filename = (&opt.resultspath).to_owned() + "/git_diff.txt";
+        let git_diff_file = File::create(git_diff_filename).unwrap();
+        assert!(Command::new("git")
+            .current_dir(opt.tockpath.to_owned())
+            .arg("diff")
+            .stdout(git_diff_file)
+            .status()
+            .expect("Failed to execute git diff")
+            .success());
 
-    // Do same thing for git log 
-    let git_log_filename = (&opt.resultspath).to_owned() + "/git_log.txt";
-    let git_log_file = File::create(git_log_filename).unwrap();
+        // Do same thing for git log
+        let git_log_filename = (&opt.resultspath).to_owned() + "/git_log.txt";
+        let git_log_file = File::create(git_log_filename).unwrap();
 
-    let git_log_out = Command::new("git")
-        .current_dir(opt.tockpath.to_owned())
-        .arg("log")
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("Failed to execute git log")
-        .stdout
-        .expect("Failed to open log stdout");
-    
-    assert!(Command::new("head")
-        .stdin(Stdio::from(git_log_out))
-        .stdout(git_log_file)
-        .arg("-n")
-        .arg("60")
-        .status()
-        .expect("Failed to execute head")
-        .success());
-    
+        let git_log_out = Command::new("git")
+            .current_dir(opt.tockpath.to_owned())
+            .arg("log")
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("Failed to execute git log")
+            .stdout
+            .expect("Failed to open log stdout");
+
+        assert!(Command::new("head")
+            .stdin(Stdio::from(git_log_out))
+            .stdout(git_log_file)
+            .arg("-n")
+            .arg("60")
+            .status()
+            .expect("Failed to execute head")
+            .success());
+    }
 
     // For now, assume target under analysis, located in the tock submodule of this crate.
     // Assume it is a thumbv7 target unless it is one of three whitelisted riscv targets.
-    let bc_dir: String = opt.tockpath.clone() + if board_path_str.contains("opentitan")
-        || board_path_str.contains("arty_e21")
-        || board_path_str.contains("hifive1")
-    {
-       "/target/riscv32imc-unknown-none-elf/release/deps/"
-    } else {
-        "/target/thumbv7em-none-eabi/release/deps/"
-    };
-
-    println!("BC DIR {}", &bc_dir);
+    let bc_dir: String = opt.tockpath.clone()
+        + if board_path_str.contains("opentitan")
+            || board_path_str.contains("arty_e21")
+            || board_path_str.contains("hifive1")
+        {
+            "/target/riscv32imc-unknown-none-elf/release/deps/"
+        } else {
+            "/target/thumbv7em-none-eabi/release/deps/"
+        };
 
     let paths = glob(&[&bc_dir, "/**/*.bc"].concat())
         .unwrap()
@@ -440,13 +455,15 @@ fn main() -> Result<(), String> {
         .unwrap();
     file.write_all(data.as_bytes()).unwrap();
 
-    // Write how long the entire operation took
-    // This might go at board level instead, not sure
-    let time_filename = (&opt.resultspath).to_owned() + "/time.txt";
-    let mut time_file = File::create(time_filename).unwrap();
-    let total_duration = end.duration_since(start);
-    let duration_str = format!("Elapsed: {:?}", total_duration);
-    time_file.write_all(duration_str.as_bytes()).unwrap();
+    if !opt.time_results {
+        // Write how long the entire operation took
+        // This might go at board level instead, not sure
+        let time_filename = (&opt.resultspath).to_owned() + "/time.txt";
+        let mut time_file = File::create(time_filename).unwrap();
+        let total_duration = end.duration_since(start);
+        let duration_str = format!("Elapsed: {:?}", total_duration);
+        time_file.write_all(duration_str.as_bytes()).unwrap();
+    }
 
     Ok(())
 }
