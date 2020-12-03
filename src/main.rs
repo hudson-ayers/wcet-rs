@@ -17,46 +17,6 @@ use structopt::StructOpt;
 
 extern crate log;
 
-/// Print all LLVM IR instructions in a given symbolic execution
-pub fn print_instrs<'p>(path: &Vec<PathEntry<'p>>) -> String {
-    let mut ret = String::new();
-    for entry in path {
-        let location = &entry.0;
-        // TODO: Below assumes terminator is not an instruction, not totally clear on how this
-        // works though.
-        match location.instr {
-            BBInstrIndex::Instr(idx) => {
-                for instr in location.bb.instrs.iter().skip(idx) {
-                    ret += &format!("{:?}\n", instr);
-                }
-            }
-            BBInstrIndex::Terminator => println!("Terminator."),
-        }
-    }
-    ret
-}
-
-/// Returns the number of LLVM instructions in this path.
-/// A path is represented as a vector of `PathEntry`s, and
-/// each PathEntry describes a sequential set of instructions in a basic block,
-/// not necessarily starting at the beginning of that basic block.
-/// Thus we have to investigate each path entry to count the number of instructions
-/// described by it.
-/// However, function calls complicate this: if function calls are not inlined, then the entire
-/// function is counted as a single instruction!
-pub fn get_path_length<'p>(path: &Vec<PathEntry<'p>>) -> usize {
-    path.iter().fold(0, |acc, entry| {
-        let location = &entry.0;
-        // TODO: Below assumes terminator is not an instruction, not totally clear on how this
-        // works though.
-        let entry_len = match location.instr {
-            BBInstrIndex::Instr(idx) => location.bb.instrs.len() - idx,
-            BBInstrIndex::Terminator => 0,
-        };
-        acc + entry_len
-    })
-}
-
 /// Given a function name and project/configuration, returns the longest path
 /// (in llvm IR "instructions") through that function, as well as a copy of the `State` of
 /// the execution manager at the conclusion of symbolically executing that path. Ties
@@ -97,8 +57,7 @@ pub fn find_longest_path<'p>(
         i += 1;
         let state = em.state();
         let path = state.get_path();
-        let len = get_path_length(path);
-        println!("with a path length of {}", len);
+        let len = haybale::state::get_path_length(path);
         if len > longest_path_len {
             longest_path_len = len;
             longest_path_state = Some(state.clone());
@@ -213,15 +172,11 @@ fn analyze_and_save_results(
             println!("len: {}", len);
             let data = "len: ".to_owned()
                 + &len.to_string()
-                + ""
-                + &state.pretty_path_llvm()
                 + "\n"
-                + &state.pretty_path_source()
-                + "\n"
-                + &print_instrs(state.get_path());
+                + &state.pretty_path_llvm_instructions();
+            // + "\n"
+            //+ &state.pretty_path_source();
             file.write_all(data.as_bytes()).unwrap();
-            //println!("{}", state.pretty_path_source());
-            //print_instrs(state.get_path());
             Ok(len.to_string())
         }
         Err(e) => {
