@@ -47,7 +47,7 @@ but they are pretty confusing, so here are some instructions that worked for me 
 ```bash
 wget https://apt.llvm.org/llvm.sh
 chmod +x llvm.sh
-sudo ./llvm.sh 10
+sudo ./llvm.sh 13
 sudo apt install zlib1g-dev
 sudo ldconfig
 ```

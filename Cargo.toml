@@ -5,7 +5,7 @@ authors = ["Hudson Ayers <hayers@stanford.edu>"]
 edition = "2018"
 
 [dependencies]
-llvm-ir = "0.7.1" # Needs to be same version as what haybale uses
+llvm-ir = "0.8.1" # Needs to be same version as what haybale uses
 glob = "0.3.0"
 simple_logger = "1.6.0"
 log = "0.4.11"
@@ -17,4 +17,4 @@ clap = { version = "2.33", default-features = false }
 #git = "https://github.com/hudson-ayers/haybale"
 #branch = "trait_obj_support"
 path = "../../../code_repos/haybale" # comment in when testing local haybale development
-features = ["llvm-10"] # Need to match LLVM version used by rust version under test
+features = ["llvm-13"] # Need to match LLVM version used by rust version under test

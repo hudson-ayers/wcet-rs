@@ -25,6 +25,7 @@ pub fn find_longest_path<'p>(
     funcname: &str,
     project: &'p Project,
     config: Config<'p, DefaultBackend>,
+    time_results: bool,
 ) -> Result<(usize, State<'p, DefaultBackend>), String> {
     let mut em: ExecutionManager<DefaultBackend> =
         symex_function(funcname, project, config, None).unwrap();
@@ -37,11 +38,13 @@ pub fn find_longest_path<'p>(
         match em.next() {
             Some(res) => match res {
                 Ok(_) => {
-                    print!(
-                        "Call to next() #{} completed in {} seconds ",
-                        i,
-                        start.elapsed().as_secs()
-                    );
+                    if time_results {
+                        print!(
+                            "Call to next() #{} completed in {} seconds ",
+                            i,
+                            start.elapsed().as_secs()
+                        );
+                    }
                 }
                 Err(e) => {
                     println!(
@@ -144,6 +147,7 @@ fn analyze_and_save_results(
     func_name: &str,
     timeout_s: u64,
     resultspath: &str,
+    time_results: bool,
 ) -> Result<String, String> {
     let paths = glob(&[bc_dir, "/**/*.bc"].concat())
         .unwrap()
@@ -157,6 +161,9 @@ fn analyze_and_save_results(
     config
         .function_hooks
         .add_rust_demangled("kernel::debug::panic", &function_hooks::abort_hook);
+    config
+        .function_hooks
+        .add_rust_demangled("core::panicking::panic_fmt", &function_hooks::abort_hook);
     let board_name = board_path_str
         .get(board_path_str.rfind('/').unwrap() + 1..)
         .unwrap();
@@ -167,7 +174,7 @@ fn analyze_and_save_results(
     let prefix = path.parent().unwrap();
     std::fs::create_dir_all(prefix).unwrap();
     let mut file = File::create(path).unwrap();
-    let ret = match find_longest_path(func_name, &project, config) {
+    let ret = match find_longest_path(func_name, &project, config, time_results) {
         Ok((len, state)) => {
             println!("len: {}", len);
             let data = "len: ".to_owned()
@@ -208,7 +215,7 @@ struct Opt {
     timeout: u64,
 
     /// Name of the tock board to analyze
-    #[structopt(short, long, default_value = "redboard_artemis_nano")]
+    #[structopt(short, long, default_value = "imixmini")]
     board: String,
 
     /// Index of function, to run a specific function within
@@ -235,10 +242,10 @@ struct Opt {
     #[structopt(short = "r", long = "resultspath", default_value = "results")]
     resultspath: String,
 
-    #[structopt(short = "g", long, default_value = "false")]
+    #[structopt(short = "g", long)]
     save_git_history: bool,
 
-    #[structopt(long = "time", default_value = false)]
+    #[structopt(long = "time")]
     time_results: bool,
 }
 
@@ -276,9 +283,11 @@ fn main() -> Result<(), String> {
         if !str_output.contains("Finished release") {
             panic!("Build failed, output: {}", str_output);
         }
+        println!("Finished building");
     }
+    println!("starting");
 
-    if !opt.save_git_history {
+    if opt.save_git_history {
         // Save current program state into a file, for reproducability later
         // Uses git commands for this
         let git_diff_filename = (&opt.resultspath).to_owned() + "/git_diff.txt";
@@ -329,7 +338,9 @@ fn main() -> Result<(), String> {
     let paths = glob(&[&bc_dir, "/**/*.bc"].concat())
         .unwrap()
         .map(|x| x.unwrap());
+    println!("globbed");
     let project = Project::from_bc_paths(paths)?;
+    println!("Project loaded");
 
     let mut functions_to_analyze = vec![];
     let mut func_name_iter = retrieve_functions_for_analysis(&project, opt.functions);
@@ -373,8 +384,16 @@ fn main() -> Result<(), String> {
         let name = board_path_str.clone();
         let bc_dir_cpy = bc_dir.clone();
         let resultspath = opt.resultspath.clone();
+        let time_results = opt.time_results;
         children.push(thread::spawn(move || {
-            match analyze_and_save_results(&bc_dir_cpy, &name, &f, timeout, &resultspath) {
+            match analyze_and_save_results(
+                &bc_dir_cpy,
+                &name,
+                &f,
+                timeout,
+                &resultspath,
+                time_results,
+            ) {
                 Ok(s) => {
                     arc.lock().map_or((), |mut map| {
                         map.insert(f, s);
@@ -403,14 +422,14 @@ fn main() -> Result<(), String> {
         .lock()
         .map(|map| {
             for (k, v) in map.iter() {
-                data = data + k + ": " + v;
+                data = data + k + ": " + v + "\n";
             }
             data
         })
         .unwrap();
     file.write_all(data.as_bytes()).unwrap();
 
-    if !opt.time_results {
+    if opt.time_results {
         // Write how long the entire operation took
         // This might go at board level instead, not sure
         let time_filename = (&opt.resultspath).to_owned() + "/time.txt";
