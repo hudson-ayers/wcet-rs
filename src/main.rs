@@ -46,6 +46,16 @@ pub fn find_longest_path<'p>(
                         );
                     }
                 }
+                Err(Error::UnreachableInstruction) => {
+                    // Rust inserts unreachable assertions along paths that it knows will not be
+                    // reachable unless we violate Rust's memory/type safety. LLVM IR on its own
+                    // does not have enough information to know these paths will never be
+                    // reachable, so sometimes haybale will attempt to execute unreachable
+                    // instructions. We simply have to ignore all paths containing these
+                    // instructions.
+                    i += 1;
+                    continue;
+                }
                 Err(e) => {
                     println!(
                         "Call to next() # {} failed after {} seconds",
@@ -128,11 +138,6 @@ fn retrieve_functions_for_analysis<'p>(
                     .chain(allow_syscalls)
                     .chain(interrupt_handlers),
             )
-
-            //functions_to_analyze.extend(allow_syscalls.map(|(f, _m)| &f.name));
-            //functions_to_analyze.extend(command_syscalls.map(|(f, _m)| &f.name));
-            //functions_to_analyze.extend(subscribe_syscalls.map(|(f, _m)| &f.name));
-            //functions_to_analyze.extend(interrupt_handlers.map(|(f, _m)| &f.name));
         }
     }
 }
