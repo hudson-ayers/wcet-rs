@@ -21,6 +21,7 @@ extern crate log;
 /// (in llvm IR "instructions") through that function, as well as a copy of the `State` of
 /// the execution manager at the conclusion of symbolically executing that path. Ties
 /// are broken at random.
+// TODO: just reuse find_longest_path in my haybale fork
 pub fn find_longest_path<'p>(
     funcname: &str,
     project: &'p Project,
@@ -62,6 +63,11 @@ pub fn find_longest_path<'p>(
                         i,
                         start.elapsed().as_secs()
                     );
+                    println!(
+                        "Failed while executing instruction in {}",
+                        em.state().cur_loc.func.name
+                    );
+                    println!("Pretty path source: {}", em.state().pretty_path_source());
                     return Err(em.state().full_error_message_with_context(e));
                 }
             },
@@ -169,6 +175,7 @@ fn analyze_and_save_results(
     config
         .function_hooks
         .add_rust_demangled("core::panicking::panic_fmt", &function_hooks::abort_hook);
+    config.longest_path_optimizations = true;
     let board_name = board_path_str
         .get(board_path_str.rfind('/').unwrap() + 1..)
         .unwrap();
@@ -216,7 +223,7 @@ struct Opt {
     verbose: u8,
 
     /// Timeout passed to Haybale runs (in seconds)
-    #[structopt(short, long, default_value = "100")]
+    #[structopt(short, long, default_value = "75")]
     timeout: u64,
 
     /// Name of the tock board to analyze
@@ -361,6 +368,10 @@ fn main() -> Result<(), String> {
                 for s in vec.iter() {
                     if !demangled.to_string().contains(s) {
                         matched = false;
+                    }
+                    // mangled name match always indicates to include this
+                    if f.name.contains(s.trim()) {
+                        matched = true;
                         break;
                     }
                 }
