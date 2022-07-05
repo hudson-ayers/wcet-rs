@@ -16,5 +16,5 @@ clap = { version = "2.33", default-features = false }
 [dependencies.haybale]
 #git = "https://github.com/hudson-ayers/haybale"
 #branch = "trait_obj_support"
-path = "../../../code_repos/haybale" # comment in when testing local haybale development
+path = "/home/hudson/code_repos/haybale" # comment in when testing local haybale development
 features = ["llvm-13"] # Need to match LLVM version used by rust version under test
