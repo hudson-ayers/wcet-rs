@@ -370,7 +370,7 @@ fn main() -> Result<(), String> {
                         matched = false;
                     }
                     // mangled name match always indicates to include this
-                    if f.name.contains(s.trim()) {
+                    if f.name.trim() == s.trim() {
                         matched = true;
                         break;
                     }
