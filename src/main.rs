@@ -30,7 +30,6 @@ pub fn find_longest_path<'p>(
 ) -> Result<(usize, State<'p, DefaultBackend>), String> {
     let mut em: ExecutionManager<DefaultBackend> =
         symex_function(funcname, project, config, None).unwrap();
-    //TODO: Following code could probably be more functional
     let mut longest_path_len = 0;
     let mut longest_path_state = None;
     let mut i = 0;
@@ -55,6 +54,41 @@ pub fn find_longest_path<'p>(
                     // instructions. We simply have to ignore all paths containing these
                     // instructions.
                     i += 1;
+                    continue;
+                }
+                Err(Error::SolverError(_)) => {
+                    println!("Solver timeout detected! Attempting to loosen constraints.");
+                    // TODO: Match on string to verify timeout?
+                    // This is usually a timeout, so for now we will assume this is always a
+                    // timeout. My approach to solver timeouts is:
+                    //
+                    // 1. Find the enclosing function of the current location when we timed out
+                    //
+                    let state = em.mut_state();
+                    let callsite = &state.stack.last().unwrap().callsite;
+                    //
+                    // 2. Instruct Haybale that the next time we call this function, we are going
+                    //    to execute it without any constraints on its inputs -- e.g. we are going
+                    //    to assume that all values in memory could be anything, and all passed in
+                    //    parameters could be anything.
+                    //    TODO: What if this function is called in a loop? This will not push any
+                    //    new backtrack points on but will lead to multiple calls..I guess we want
+                    //    to keep the function unconstrained until the current backtrack point is
+                    //    complete. Configured to panic internally if this happens, lets see if it
+                    //    is an issue in practice.
+                    //
+                    state.fn_to_clear = Some(callsite.clone());
+                    //
+                    // 3. Find where in the failing path this function was last called, and then find
+                    //    the backtracking point immediately preceding this call
+                    //
+                    let restart_point = state.last_backtrack_point.take().unwrap();
+                    // Verify that the restart point is not in the same call frame as the point of
+                    // failure, if it is backtracking will not help us because the constraints will
+                    // be unchanged. TODO improve this to not panic and instead print useful info.
+                    assert!(&(restart_point.stack.last().unwrap().callsite) != callsite);
+                    state.backtrack_points.borrow_mut().push(restart_point);
+                    // now next call to next() should resume from restart_point!
                     continue;
                 }
                 Err(e) => {
