@@ -9,6 +9,7 @@ use std::io::prelude::*;
 use std::process::{Command, Stdio};
 use std::result::Result;
 use std::string::String;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
@@ -16,6 +17,8 @@ use std::vec::Vec;
 use structopt::StructOpt;
 
 extern crate log;
+
+static RETRY_ONGOING: AtomicBool = AtomicBool::new(false);
 
 /// Given a function name and project/configuration, returns the longest path
 /// (in llvm IR "instructions") through that function, as well as a copy of the `State` of
@@ -56,15 +59,29 @@ pub fn find_longest_path<'p>(
                     i += 1;
                     continue;
                 }
-                Err(Error::SolverError(_)) => {
+                Err(Error::SolverError(e)) => {
+                    if !e.contains("timed out") {
+                        println!("Solver error, not a timeout.");
+                        return Err(em
+                            .state()
+                            .full_error_message_with_context(Error::SolverError(e)));
+                    } else {
+                        println!("{}", e);
+                        if RETRY_ONGOING.load(Ordering::Relaxed) {
+                            panic!("Double timeout");
+                        }
+                    }
                     println!("Solver timeout detected! Attempting to loosen constraints.");
-                    // TODO: Match on string to verify timeout?
                     // This is usually a timeout, so for now we will assume this is always a
                     // timeout. My approach to solver timeouts is:
                     //
                     // 1. Find the enclosing function of the current location when we timed out
                     //
                     let state = em.mut_state();
+                    println!(
+                        "Location of timeout: {}",
+                        state.cur_loc.to_string_no_module()
+                    );
                     let callsite = &state.stack.last().unwrap().callsite;
                     //
                     // 2. Instruct Haybale that the next time we call this function, we are going
@@ -78,6 +95,7 @@ pub fn find_longest_path<'p>(
                     //    is an issue in practice.
                     //
                     state.fn_to_clear = Some(callsite.clone());
+                    println!("fn_to_clear: {:?}", state.fn_to_clear);
                     //
                     // 3. Find where in the failing path this function was last called, and then find
                     //    the backtracking point immediately preceding this call
@@ -87,7 +105,10 @@ pub fn find_longest_path<'p>(
                     // failure, if it is backtracking will not help us because the constraints will
                     // be unchanged. TODO improve this to not panic and instead print useful info.
                     assert!(&(restart_point.stack.last().unwrap().callsite) != callsite);
+                    println!("restart point: {:?}", restart_point.loc);
+                    state.solver.push(1); // Solver level needs to be in sync with backtrack queue
                     state.backtrack_points.borrow_mut().push(restart_point);
+                    RETRY_ONGOING.store(true, Ordering::Relaxed);
                     // now next call to next() should resume from restart_point!
                     continue;
                 }
@@ -257,7 +278,9 @@ struct Opt {
     verbose: u8,
 
     /// Timeout passed to Haybale runs (in seconds)
-    #[structopt(short, long, default_value = "75")]
+    /// This is only the timeout for the initial runs,
+    /// not the partitioned runs
+    #[structopt(short, long, default_value = "25")]
     timeout: u64,
 
     /// Name of the tock board to analyze
