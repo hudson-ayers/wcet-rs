@@ -17,7 +17,7 @@ clap = { version = "2.33", default-features = false }
 #git = "https://github.com/hudson-ayers/haybale"
 #branch = "trait_obj_support"
 path = "/home/hudson/code_repos/haybale" # comment in when testing local haybale development
-features = ["llvm-13", "vendor-boolector"] # Need to match LLVM version used by rust version under test
+features = ["llvm-13"] # Need to match LLVM version used by rust version under test
 
 [profile.dev]
 panic = "abort"

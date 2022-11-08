@@ -280,7 +280,7 @@ struct Opt {
     /// Timeout passed to Haybale runs (in seconds)
     /// This is only the timeout for the initial runs,
     /// not the partitioned runs
-    #[structopt(short, long, default_value = "25")]
+    #[structopt(short, long, default_value = "28")]
     timeout: u64,
 
     /// Name of the tock board to analyze
