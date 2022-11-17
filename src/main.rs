@@ -9,7 +9,6 @@ use std::io::prelude::*;
 use std::process::{Command, Stdio};
 use std::result::Result;
 use std::string::String;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
@@ -17,130 +16,6 @@ use std::vec::Vec;
 use structopt::StructOpt;
 
 extern crate log;
-
-static RETRY_ONGOING: AtomicBool = AtomicBool::new(false);
-
-/// Given a function name and project/configuration, returns the longest path
-/// (in llvm IR "instructions") through that function, as well as a copy of the `State` of
-/// the execution manager at the conclusion of symbolically executing that path. Ties
-/// are broken at random.
-// TODO: just reuse find_longest_path in my haybale fork
-pub fn find_longest_path<'p>(
-    funcname: &str,
-    project: &'p Project,
-    config: Config<'p, DefaultBackend>,
-    time_results: bool,
-) -> Result<(usize, State<'p, DefaultBackend>), String> {
-    let mut em: ExecutionManager<DefaultBackend> =
-        symex_function(funcname, project, config, None).unwrap();
-    let mut longest_path_len = 0;
-    let mut longest_path_state = None;
-    let mut i = 0;
-    loop {
-        let start = Instant::now();
-        match em.next() {
-            Some(res) => match res {
-                Ok(_) => {
-                    if time_results {
-                        print!(
-                            "Call to next() #{} completed in {} seconds ",
-                            i,
-                            start.elapsed().as_secs()
-                        );
-                    }
-                }
-                Err(Error::UnreachableInstruction) => {
-                    // Rust inserts unreachable assertions along paths that it knows will not be
-                    // reachable unless we violate Rust's memory/type safety. LLVM IR on its own
-                    // does not have enough information to know these paths will never be
-                    // reachable, so sometimes haybale will attempt to execute unreachable
-                    // instructions. We simply have to ignore all paths containing these
-                    // instructions.
-                    i += 1;
-                    continue;
-                }
-                Err(Error::SolverError(e)) => {
-                    if !e.contains("timed out") {
-                        println!("Solver error, not a timeout.");
-                        return Err(em
-                            .state()
-                            .full_error_message_with_context(Error::SolverError(e)));
-                    } else {
-                        println!("{}", e);
-                        if RETRY_ONGOING.load(Ordering::Relaxed) {
-                            panic!("Double timeout");
-                        }
-                    }
-                    println!("Solver timeout detected! Attempting to loosen constraints.");
-                    // This is usually a timeout, so for now we will assume this is always a
-                    // timeout. My approach to solver timeouts is:
-                    //
-                    // 1. Find the enclosing function of the current location when we timed out
-                    //
-                    let state = em.mut_state();
-                    println!(
-                        "Location of timeout: {}",
-                        state.cur_loc.to_string_no_module()
-                    );
-                    let callsite = &state.stack.last().unwrap().callsite;
-                    //
-                    // 2. Instruct Haybale that the next time we call this function, we are going
-                    //    to execute it without any constraints on its inputs -- e.g. we are going
-                    //    to assume that all values in memory could be anything, and all passed in
-                    //    parameters could be anything.
-                    //    TODO: What if this function is called in a loop? This will not push any
-                    //    new backtrack points on but will lead to multiple calls..I guess we want
-                    //    to keep the function unconstrained until the current backtrack point is
-                    //    complete. Configured to panic internally if this happens, lets see if it
-                    //    is an issue in practice.
-                    //
-                    state.fn_to_clear = Some(callsite.clone());
-                    println!("fn_to_clear: {:?}", state.fn_to_clear);
-                    //
-                    // 3. Find where in the failing path this function was last called, and then find
-                    //    the backtracking point immediately preceding this call
-                    //
-                    let restart_point = state.last_backtrack_point.take().unwrap();
-                    // Verify that the restart point is not in the same call frame as the point of
-                    // failure, if it is backtracking will not help us because the constraints will
-                    // be unchanged. TODO improve this to not panic and instead print useful info.
-                    assert!(&(restart_point.stack.last().unwrap().callsite) != callsite);
-                    println!("restart point: {:?}", restart_point.loc);
-                    state.solver.push(1); // Solver level needs to be in sync with backtrack queue
-                    state.backtrack_points.borrow_mut().push(restart_point);
-                    RETRY_ONGOING.store(true, Ordering::Relaxed);
-                    // now next call to next() should resume from restart_point!
-                    continue;
-                }
-                Err(e) => {
-                    println!(
-                        "Call to next() # {} failed after {} seconds",
-                        i,
-                        start.elapsed().as_secs()
-                    );
-                    println!(
-                        "Failed while executing instruction in {}",
-                        em.state().cur_loc.func.name
-                    );
-                    println!("Pretty path source: {}", em.state().pretty_path_source());
-                    return Err(em.state().full_error_message_with_context(e));
-                }
-            },
-            None => break,
-        }
-        i += 1;
-        let state = em.state();
-        let path = state.get_path();
-        let len = haybale::state::get_path_length(path);
-        if len > longest_path_len {
-            longest_path_len = len;
-            longest_path_state = Some(state.clone());
-        }
-    }
-    longest_path_state.map_or(Err("No Paths found".to_string()), |state| {
-        Ok((longest_path_len, state))
-    })
-}
 
 arg_enum! {
     #[derive(Debug)]
@@ -241,24 +116,25 @@ fn analyze_and_save_results(
     let prefix = path.parent().unwrap();
     std::fs::create_dir_all(prefix).unwrap();
     let mut file = File::create(path).unwrap();
-    let ret = match find_longest_path(func_name, &project, config, time_results) {
-        Ok((len, state)) => {
-            println!("len: {}", len);
-            let data = "len: ".to_owned()
-                + &len.to_string()
-                + "\n"
-                + &state.pretty_path_llvm_instructions();
-            // + "\n"
-            //+ &state.pretty_path_source();
-            file.write_all(data.as_bytes()).unwrap();
-            Ok(len.to_string())
-        }
-        Err(e) => {
-            println!("{}", e);
-            file.write_all(e.as_bytes()).unwrap();
-            Err("Fail: ".to_string() + &e)
-        }
-    };
+    let ret =
+        match haybale::dyn_dispatch::find_longest_path(func_name, &project, config, time_results) {
+            Ok((len, state)) => {
+                println!("len: {}", len);
+                let data = "len: ".to_owned()
+                    + &len.to_string()
+                    + "\n"
+                    + &state.pretty_path_llvm_instructions();
+                // + "\n"
+                //+ &state.pretty_path_source();
+                file.write_all(data.as_bytes()).unwrap();
+                Ok(len.to_string())
+            }
+            Err(e) => {
+                println!("{}", e);
+                file.write_all(e.as_bytes()).unwrap();
+                Err("Fail: ".to_string() + &e)
+            }
+        };
     ret
 }
 
@@ -280,7 +156,7 @@ struct Opt {
     /// Timeout passed to Haybale runs (in seconds)
     /// This is only the timeout for the initial runs,
     /// not the partitioned runs
-    #[structopt(short, long, default_value = "28")]
+    #[structopt(short, long, default_value = "75")]
     timeout: u64,
 
     /// Name of the tock board to analyze
@@ -316,6 +192,9 @@ struct Opt {
 
     #[structopt(long = "time")]
     time_results: bool,
+
+    #[structopt(long = "print")]
+    print_function_names: bool,
 }
 
 fn main() -> Result<(), String> {
@@ -413,6 +292,12 @@ fn main() -> Result<(), String> {
 
     let mut functions_to_analyze = vec![];
     let mut func_name_iter = retrieve_functions_for_analysis(&project, opt.functions);
+    if opt.print_function_names {
+        for f in func_name_iter {
+            println!("{:?}", f.0.name);
+        }
+        return Ok(());
+    }
     if opt.func_name_contains.is_some() {
         let vec = opt.func_name_contains.unwrap().clone();
         println!("func_name_contains: {:?}", vec);
