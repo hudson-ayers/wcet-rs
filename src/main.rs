@@ -17,6 +17,8 @@ use structopt::StructOpt;
 
 extern crate log;
 
+mod instruction_counter;
+
 arg_enum! {
     #[derive(Debug)]
     enum KernelWorkType {
@@ -95,6 +97,7 @@ fn analyze_and_save_results(
     timeout_s: u64,
     resultspath: &str,
     time_results: bool,
+    disassembly: &String,
 ) -> Result<String, String> {
     let paths = glob(&[bc_dir, "/**/*.bc"].concat())
         .unwrap()
@@ -125,7 +128,11 @@ fn analyze_and_save_results(
     let ret =
         match haybale::dyn_dispatch::find_longest_path(func_name, &project, config, time_results) {
             Ok((len, state)) => {
-                println!("len: {}", len);
+                println!("IR len: {}", len);
+                let raw_instruction_count =
+                    instruction_counter::count_instructions(disassembly, &state)
+                        .expect("failed to get raw instruction count");
+                println!("raw instruction count: {}", raw_instruction_count);
                 let data = "len: ".to_owned()
                     + &len.to_string()
                     + "\n"
@@ -201,6 +208,21 @@ struct Opt {
 
     #[structopt(long = "print")]
     print_function_names: bool,
+}
+
+fn get_disassembly(elf_path: &String) -> String {
+    let output = Command::new("arm-none-eabi-objdump")
+        .arg("-C")
+        .arg("--line-numbers")
+        .arg("-d")
+        .arg(elf_path)
+        .output()
+        .expect("failed to execute objdump");
+
+    let str_output = String::from_utf8(output.stdout).expect("failed to parse objdump output");
+    println!("{}", &str_output);
+
+    str_output
 }
 
 fn main() -> Result<(), String> {
@@ -279,15 +301,21 @@ fn main() -> Result<(), String> {
 
     // For now, assume target under analysis, located in the tock submodule of this crate.
     // Assume it is a thumbv7 target unless it is one of three whitelisted riscv targets.
-    let bc_dir: String = opt.tockpath.clone()
+    let target_dir: String = opt.tockpath.clone()
         + if board_path_str.contains("opentitan")
             || board_path_str.contains("arty_e21")
             || board_path_str.contains("hifive1")
         {
-            "/target/riscv32imc-unknown-none-elf/release/deps/"
+            "/target/riscv32imc-unknown-none-elf/release/"
         } else {
-            "/target/thumbv7em-none-eabi/release/deps/"
+            "/target/thumbv7em-none-eabi/release/"
         };
+
+    // Assume the target is the imixmini board.
+    let elf_path: String = target_dir.clone() + "imixmini.elf";
+    let disassembly: String = get_disassembly(&elf_path);
+
+    let bc_dir: String = target_dir + "deps/";
 
     let paths = glob(&[&bc_dir, "/**/*.bc"].concat())
         .unwrap()
@@ -348,6 +376,7 @@ fn main() -> Result<(), String> {
         let name = board_path_str.clone();
         let bc_dir_cpy = bc_dir.clone();
         let resultspath = opt.resultspath.clone();
+        let disassembly_cpy = disassembly.clone(); // TODO: why do we need to do this?
         let time_results = opt.time_results;
         children.push(thread::spawn(move || {
             match analyze_and_save_results(
@@ -357,6 +386,7 @@ fn main() -> Result<(), String> {
                 timeout,
                 &resultspath,
                 time_results,
+                &disassembly_cpy,
             ) {
                 Ok(s) => {
                     arc.lock().map_or((), |mut map| {
