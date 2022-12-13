@@ -97,7 +97,7 @@ fn analyze_and_save_results(
     timeout_s: u64,
     resultspath: &str,
     time_results: bool,
-    disassembly: &String,
+    disassembly: &Vec<String>,
 ) -> Result<String, String> {
     let paths = glob(&[bc_dir, "/**/*.bc"].concat())
         .unwrap()
@@ -210,7 +210,7 @@ struct Opt {
     print_function_names: bool,
 }
 
-fn get_disassembly(elf_path: &String) -> String {
+fn get_disassembly(elf_path: &String) -> Vec<String> {
     let output = Command::new("arm-none-eabi-objdump")
         .arg("-C")
         .arg("--line-numbers")
@@ -222,7 +222,7 @@ fn get_disassembly(elf_path: &String) -> String {
     let str_output = String::from_utf8(output.stdout).expect("failed to parse objdump output");
     println!("{}", &str_output);
 
-    str_output
+    str_output.lines().map(|s| s.to_owned()).collect()
 }
 
 fn main() -> Result<(), String> {
@@ -313,7 +313,7 @@ fn main() -> Result<(), String> {
 
     // Assume the target is the imixmini board.
     let elf_path: String = target_dir.clone() + "imixmini.elf";
-    let disassembly: String = get_disassembly(&elf_path);
+    let disassembly: Vec<String> = get_disassembly(&elf_path);
 
     let bc_dir: String = target_dir + "deps/";
 
