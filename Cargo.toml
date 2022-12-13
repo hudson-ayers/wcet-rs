@@ -16,7 +16,7 @@ clap = { version = "2.33", default-features = false }
 [dependencies.haybale]
 #git = "https://github.com/hudson-ayers/haybale"
 #branch = "partitioning"
-path = "/home/hudson/code_repos/haybale" # comment in when testing local haybale development
+path = "/home/paul/haybale" # comment in when testing local haybale development
 features = ["llvm-13", "vendor-boolector"] # Need to match LLVM version used by rust version under test
 
 [profile.dev]
