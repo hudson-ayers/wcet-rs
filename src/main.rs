@@ -20,6 +20,7 @@ extern crate log;
 arg_enum! {
     #[derive(Debug)]
     enum KernelWorkType {
+        DeferredCalls,
         Interrupts,
         Commands,
         Subscribes,
@@ -44,6 +45,11 @@ fn retrieve_functions_for_analysis<'p>(
             project
                 .all_functions()
                 .filter(|(f, _m)| f.name.contains("handle_interrupt")),
+        ),
+        KernelWorkType::DeferredCalls => Box::new(
+            project
+                .all_functions()
+                .filter(|(f, _m)| f.name.contains("handle_deferred_call")),
         ),
         KernelWorkType::Commands => Box::new(project.all_functions().filter(|(f, _m)| {
             f.name.contains("command")
@@ -97,7 +103,7 @@ fn analyze_and_save_results(
 
     let mut config: Config<DefaultBackend> = Config::default();
     config.null_pointer_checking = config::NullPointerChecking::None; // In the Tock kernel, we trust that Rust safety mechanisms prevent null pointer dereferences.
-    config.loop_bound = 50; // default is 10, raise if larger loops exist
+    config.loop_bound = 100; // default is 10, raise if larger loops exist
     config.solver_query_timeout = Some(std::time::Duration::new(timeout_s, 0)); // extend query timeout
     config
         .function_hooks
