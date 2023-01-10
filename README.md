@@ -33,6 +33,12 @@ these longest paths requires additional tooling, such as verilator or a mechanis
 to platform-specific assembly, and using published instruction timing for that assembly. Currently, this
 is future work.
 
+As of 1/9/2023 much of the code that originally lived in this repository has been moved into the Haybale fork
+which this repository depends on. I have found as this work has progressed that the API exported by upstream
+Haybale is not flexible enough to support many of the WCET-finding specific optimizations which this work
+requires. Once this tool is in a more stable state I plan to move much of that functionality back into this
+repository after modifying Haybale enough to provide the flexibility I need.
+
 ## Installation + Setup
 
 Using this tool requires installing several system packages which are necessary for Haybale - specifically
@@ -71,3 +77,41 @@ You can choose a set of functions for analysis using the command line options to
 
 Finally, run the tool using `cargo run -- <options>`. The results for each function will placed in a different text file in the root of the directory.
 For runs that fail, the results file will contain the error that led to the failure.
+
+## Current Soundness Limitations
+The optimizations made by this tool currently make several assumptions which make it possible that this tool returns
+longest path results which are not actually the longest paths through the function in question. A list of these limitations
+follows, alongside some of my short-or-long-term plans for resolving each.
+
+1. Trait object dispatch: I don't unconstrain variables touched by every path,
+   so local greedy optimization is incorrect. Solution: reimplement to duplicate the
+   logic in symex_switch. This will strictly harm performance so I am waiting
+   to do it until I have worked out the bigger remaining issues – this one is
+   actually straightforward, other than that it might interact poorly with my
+   existing function call based retry logic, I don't want to retry one of these
+   branched calls, only calls with a single known target. Upside of this is
+   being able to get rid of the whole hacky cache storing the longest path
+   deal.
+
+2. Timeout/retry mechanism: multiple issues
+  - Greedy selection of longest path through that specific function, without
+    unconstraining any variables touched by other paths
+  - even for the path we do take, we are throwing away constraints that it
+    accumulates throughout, on local variables, memory, and global allocations
+  - I do not verify that the backtrack point I am returning to is "above" (in a
+    CFG) the point at which I failed – only that when I failed I was not in the
+    failing function. Solution: verify that the
+    fn_to_clear is nowhere to be found in the entire callstack of the backtrack
+    point. This will limit the number of failures which we are capable of
+    handling, but probably not by much, and removes any potential issues with
+    recursion or branches internal to the failing function before the failure.
+  - haven't confirmed my path appending is correct
+
+3. The path with the most LLVM-IR instructions is not necessarily the path
+which will require the most cycles to execute on a given platform. An initial
+optimization to improve this would just be to count the length of paths by
+ignoring LLVM intrinsics which do not generate CPU instructions (e.g. debug
+intrinsics). A more complete solution would allow users to associate a cycle
+count with each LLVM instruction. A complete solution requires compiling the
+LLVM-IR to CPU instructions for each path and comparing those lengths.
+

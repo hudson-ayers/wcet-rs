@@ -326,7 +326,7 @@ fn main() -> Result<(), String> {
                 matched
             })
             .next()
-            .unwrap()
+            .expect("Failed to find function matching requested name")
             .0
             .name;
         println!("Profiling {:?}", func_name);
