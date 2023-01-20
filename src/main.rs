@@ -18,6 +18,7 @@ use structopt::StructOpt;
 extern crate log;
 
 mod instruction_counter;
+use instruction_counter::*;
 
 arg_enum! {
     #[derive(Debug)]
@@ -97,7 +98,7 @@ fn analyze_and_save_results(
     timeout_s: u64,
     resultspath: &str,
     time_results: bool,
-    disassembly: &Vec<String>,
+    disassembly: &Disassem,
 ) -> Result<String, String> {
     let paths = glob(&[bc_dir, "/**/*.bc"].concat())
         .unwrap()
@@ -128,12 +129,15 @@ fn analyze_and_save_results(
     let ret =
         match haybale::dyn_dispatch::find_longest_path(func_name, &project, config, time_results) {
             Ok((len, state)) => {
-                println!("IR len: {}", len);
-                let raw_instruction_count =
-                    instruction_counter::count_instructions(disassembly, &state)
+                let (raw_instruction_str, raw_instruction_count) =
+                    count_instructions(disassembly, &state)
                         .expect("failed to get raw instruction count");
-                println!("raw instruction count: {}", raw_instruction_count);
-                let data = "len: ".to_owned()
+
+                let data = "Assembly len: ".to_owned()
+                    + &raw_instruction_count.to_string()
+                    + "\n"
+                    + &raw_instruction_str
+                    + "IR len: "
                     + &len.to_string()
                     + "\n"
                     + &state.pretty_path_llvm_instructions();
@@ -208,21 +212,6 @@ struct Opt {
 
     #[structopt(long = "print")]
     print_function_names: bool,
-}
-
-fn get_disassembly(elf_path: &String) -> Vec<String> {
-    let output = Command::new("arm-none-eabi-objdump")
-        .arg("-C")
-        .arg("--line-numbers")
-        .arg("-d")
-        .arg(elf_path)
-        .output()
-        .expect("failed to execute objdump");
-
-    let str_output = String::from_utf8(output.stdout).expect("failed to parse objdump output");
-    println!("{}", &str_output);
-
-    str_output.lines().map(|s| s.to_owned()).collect()
 }
 
 fn main() -> Result<(), String> {
@@ -313,7 +302,7 @@ fn main() -> Result<(), String> {
 
     // Assume the target is the imixmini board.
     let elf_path: String = target_dir.clone() + "imixmini.elf";
-    let disassembly: Vec<String> = get_disassembly(&elf_path);
+    let disassembly = get_disassembly(&elf_path);
 
     let bc_dir: String = target_dir + "deps/";
 
@@ -376,7 +365,7 @@ fn main() -> Result<(), String> {
         let name = board_path_str.clone();
         let bc_dir_cpy = bc_dir.clone();
         let resultspath = opt.resultspath.clone();
-        let disassembly_cpy = disassembly.clone(); // TODO: why do we need to do this?
+        let disassembly_cpy: Disassem = disassembly.clone();
         let time_results = opt.time_results;
         children.push(thread::spawn(move || {
             match analyze_and_save_results(
