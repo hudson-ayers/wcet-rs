@@ -10,16 +10,17 @@ use regex::Regex;
 const LOOKUP_THRESHOLD_PRE: usize = 5;
 const LOOKUP_THRESHOLD_POST: usize = 2;
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct LookupInfo {
     source_line: usize,
     disassem_line: usize,
     num_instrs: usize,
+    instrs_str: String,
 }
 pub type SourceLookUp = HashMap<String, Vec<LookupInfo>>;
 pub type Disassem = (Vec<String>, SourceLookUp);
 
-fn count_outlined_functions(disassem: &Vec<String>) -> HashMap<String, usize> {
+fn count_outlined_functions(disassem: &Vec<String>) -> HashMap<String, (usize, String)> {
     let re = Regex::new(r"^[0-9a-f]+ <OUTLINED_FUNCTION_\d+>:").unwrap();
     let name_re = Regex::new(r"(OUTLINED_FUNCTION_\d+)").unwrap();
     let mut res = HashMap::new();
@@ -29,16 +30,19 @@ fn count_outlined_functions(disassem: &Vec<String>) -> HashMap<String, usize> {
             let alt_name = &name_re.captures(&disassem[i + 1]).unwrap()[1];
             let mut count = 0;
             let mut index = i + 2;
+            let mut outlined_str = name.to_owned();
             while index < disassem.len() && disassem[index] != "" {
                 index += 1;
                 count += 1;
+                outlined_str.push_str(&format!("\n{}", disassem[index]));
             }
+            outlined_str.push_str(&("End of ".to_owned() + name));
 
             if !res.contains_key(name) {
-                res.insert(name.to_owned(), count);
+                res.insert(name.to_owned(), (count, outlined_str.clone()));
             }
             if !res.contains_key(alt_name) {
-                res.insert(alt_name.to_owned(), count);
+                res.insert(alt_name.to_owned(), (count, outlined_str));
             }
         }
     }
@@ -77,12 +81,16 @@ pub fn get_disassembly(elf_path: &String) -> Disassem {
 
             let mut count = 0;
             let mut index = i + 1;
+            let mut instrs_str = String::new();
             while index < disassem.len() && re.is_match(&disassem[index]) {
                 if !disassem[index].contains(".word") {
                     count += 1;
+                    instrs_str.push_str(&format!("{}\n", disassem[index]));
                     if outlined.is_match(&disassem[index]) {
                         let name = &outlined.captures(&disassem[index]).unwrap()[1];
-                        count += outlined_count[name];
+                        let outlined_count_and_str = &outlined_count[name];
+                        count += outlined_count_and_str.0;
+                        instrs_str.push_str(&format!("{}\n", outlined_count_and_str.1));
                     }
                 }
                 index += 1;
@@ -92,6 +100,7 @@ pub fn get_disassembly(elf_path: &String) -> Disassem {
                 source_line,
                 disassem_line: i + 1,
                 num_instrs: count,
+                instrs_str,
             };
 
             match source_lookup.get_mut(source_file) {
@@ -135,9 +144,9 @@ pub fn count_instructions<'p, B: Backend>(
             }
         }
     }
-    let mut path_str = String::new();
+    let mut ir_path_str = String::new();
     let mut total_assembly_instrs = 0;
-    let mut seen = HashSet::new();
+    let mut seen = HashMap::new();
     for path_entry in state.get_path().iter() {
         let location = &path_entry.0;
         match location.instr {
@@ -149,7 +158,7 @@ pub fn count_instructions<'p, B: Backend>(
                     match debug {
                         Some(debug_loc) => {
                             if debug_loc.line == 0 {
-                                path_str
+                                ir_path_str
                                     .push_str(&format!("{} | NO DEBUG LOC AVAILABLE!!!!\n", instr))
                             } else {
                                 let filename = match debug_loc.directory.as_ref() {
@@ -188,39 +197,43 @@ pub fn count_instructions<'p, B: Backend>(
                                                     },
                                                     lookupinfo.disassem_line,
                                                     lookupinfo.num_instrs,
+                                                    &lookupinfo.instrs_str,
                                                 )
                                             })
                                             .min()
                                             .unwrap();
                                         if closest_disassem_line.0 == usize::MAX {
-                                            path_str.push_str(&format!(
+                                            ir_path_str.push_str(&format!(
                                                 "{} | {}, LOOKUP_THRESHOLD exceeded\n",
                                                 instr, debug_loc
                                             ));
                                         } else {
-                                            path_str.push_str(&format!(
+                                            ir_path_str.push_str(&format!(
                                                 "{} | {}, {}, {}\n",
                                                 instr,
                                                 debug_loc,
                                                 closest_disassem_line.1,
                                                 closest_disassem_line.2
                                             ));
-                                            if !seen.contains(&closest_disassem_line.1) {
+                                            // add asm instrs
+                                            if !seen.contains_key(&closest_disassem_line.1) {
                                                 total_assembly_instrs += closest_disassem_line.2;
-                                                seen.insert(closest_disassem_line.1);
+                                                seen.insert(
+                                                    closest_disassem_line.1,
+                                                    closest_disassem_line.3,
+                                                );
                                             };
                                         }
                                     }
-                                    None => path_str.push_str(&format!(
+                                    None => ir_path_str.push_str(&format!(
                                         "{} | {}, fn: {}, LOOKUP FAILED\n",
                                         instr, debug_loc, filename
                                     )),
                                 }
                             }
                         }
-                        None => {
-                            path_str.push_str(&format!("{} | NO DEBUG LOC AVAILABLE!!!!\n", instr))
-                        }
+                        None => ir_path_str
+                            .push_str(&format!("{} | NO DEBUG LOC AVAILABLE!!!!\n", instr)),
                     }
                     match instr {
                         llvm_ir::instruction::Instruction::Call(_) => {
@@ -234,14 +247,24 @@ pub fn count_instructions<'p, B: Backend>(
                 }
                 // add terminator, but only if we did not leave bb early bc of function call.
                 if !broke_early {
-                    path_str.push_str(&format!("{}\n", location.bb.term));
+                    ir_path_str.push_str(&format!("{}\n", location.bb.term));
                 }
             }
             BBInstrIndex::Terminator => {
-                path_str.push_str(&format!("{}\n", location.bb.term));
+                ir_path_str.push_str(&format!("{}\n", location.bb.term));
             }
         }
     }
 
-    Ok((path_str, total_assembly_instrs))
+    let mut seen_vec = seen
+        .iter()
+        .map(|(&line_num, &inst_str)| (line_num, inst_str))
+        .collect::<Vec<(usize, &String)>>();
+    seen_vec.sort();
+
+    let asm_path_str = seen_vec.iter().fold("".to_owned(), |acc, e| acc + e.1);
+
+    let res_str = "ASM Path:\n".to_owned() + &asm_path_str + "Annotated IR Path:\n" + &ir_path_str;
+
+    Ok((res_str, total_assembly_instrs))
 }
