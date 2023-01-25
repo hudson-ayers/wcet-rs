@@ -1,3 +1,7 @@
+## Note
+This branch is a snapshot of the algorithm used by this tool before I started exploring partioning
+algorithms to mitigate the path explosion problem.
+
 # Tock WCET Analysis Tooling
 
 This repository contains code that uses a modified version of the Haybale symbolic execution
