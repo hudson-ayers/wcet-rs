@@ -300,7 +300,6 @@ fn main() -> Result<(), String> {
             "/target/thumbv7em-none-eabi/release/"
         };
 
-
     let bc_dir: String = target_dir + "deps/";
     let disassembly = get_disassembly(&bc_dir, &opt.board);
 

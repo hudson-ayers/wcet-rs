@@ -41,21 +41,18 @@ pub fn get_disassembly(bc_dir: &String, board_name: &String) -> Disassem {
 
 /// Build the regexes used to find the function and basic block location
 fn build_func_and_bb_patterns(location: &Location) -> (Regex, Regex) {
+    // matches the start of the desired function
     let func_name = &location.func.name;
     let func_pat = format!(r"^{}:$", func_name);
     let func_re = Regex::new(&func_pat).unwrap();
 
+    // matches the start of the desired bb
+    // TODO: The basic block name can take on many forms...
     let bb_name = &location.bb.name;
-    let bb_pat = format!(r"^.*{}.*$", bb_name);
+    let bb_pat = format!(r"^.*(@\s*{}).*$", bb_name);
     let bb_re = Regex::new(&bb_pat).unwrap();
 
     (func_re, bb_re)
-}
-
-/// Check if a line in the disassembly is actually a machine instruction
-fn is_instr(line: &str) -> bool {
-    // TODO: fill in function
-    line.len() > 0
 }
 
 /// Count the number of machine instructions corresponding to the current path
@@ -63,8 +60,10 @@ pub fn count_instructions<'p, B: Backend>(
     disassembly: &Disassem,
     state: &State<'p, B>,
 ) -> Result<(String, usize), String> {
-    // TODO: check if this is the correct regex for the start of a function or bb
-    let bb_or_func_re = Regex::new(r"(^_.+:$)|(.*%bb.\d:.*+)").unwrap();
+    // matches any line that is a machine instruction
+    let instr_re = Regex::new(r"^(\s*)([^\s\.@_])(.*)$").unwrap();
+    // matches the start of a function or bb
+    let bb_or_func_re = Regex::new(r"(^_.+:$)|(^@\s*%bb.\d+:.*$)").unwrap();
 
     let mut res = String::new();
     let mut num_instrs = 0;
@@ -81,13 +80,13 @@ pub fn count_instructions<'p, B: Backend>(
 
         let (func_re, bb_re) = build_func_and_bb_patterns(location);
 
-        let mut found = false;
+        let mut func_found = false;
+        let mut current_block_instr_len = 0;
         for (i, line) in disassembly.iter().enumerate() {
             if func_re.is_match(line) {
+                func_found = true;
+
                 // skip to the start of the basic block
-                // TODO: this bb_re is incorrect,
-                //       if bb's name is a number it needs to be formatted correctly.
-                //       there can also be other hazards.
                 let mut index = i;
                 while index < disassembly.len() && !bb_re.is_match(&disassembly[index]) {
                     index += 1;
@@ -97,22 +96,23 @@ pub fn count_instructions<'p, B: Backend>(
                 // append every machine instruction encountered
                 // TODO: account for OUTLINED_FUNCTIONs and other potential hazards
                 while index < disassembly.len() && !bb_or_func_re.is_match(&disassembly[index]) {
-                    if is_instr(&disassembly[index]) {
+                    if instr_re.is_match(&disassembly[index]) {
                         res.push_str(&disassembly[index]);
                         res.push('\n');
-                        num_instrs += 1;
+                        current_block_instr_len += 1;
                     }
                     index += 1;
                 }
 
-                found = true;
                 break;
             }
         }
 
-        if !found {
-            // TODO: why you sometime no print?
-            res.push_str("Did not find the basic block...\n");
+        num_instrs += current_block_instr_len;
+        if !func_found {
+            res.push_str("Did not find the function...\n");
+        } else if current_block_instr_len == 0 {
+            res.push_str("Basic block is empty or not found...\n");
         }
     }
 
