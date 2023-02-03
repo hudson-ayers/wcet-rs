@@ -300,8 +300,7 @@ fn main() -> Result<(), String> {
             "/target/thumbv7em-none-eabi/release/"
         };
 
-    // Assume the target is the imixmini board.
-    let elf_path: String = target_dir.clone() + "imixmini.elf";
+    let elf_path: String = target_dir.clone() + &opt.board.to_owned() + ".elf";
     let disassembly = get_disassembly(&elf_path);
 
     let bc_dir: String = target_dir + "deps/";
