@@ -300,10 +300,9 @@ fn main() -> Result<(), String> {
             "/target/thumbv7em-none-eabi/release/"
         };
 
-    let elf_path: String = target_dir.clone() + &opt.board.to_owned() + ".elf";
-    let disassembly = get_disassembly(&elf_path);
 
     let bc_dir: String = target_dir + "deps/";
+    let disassembly = get_disassembly(&bc_dir, &opt.board);
 
     let paths = glob(&[&bc_dir, "/**/*.bc"].concat())
         .unwrap()
