@@ -22,6 +22,7 @@ fn find_bc_file(bc_dir: &String, board_name: &String) -> String {
 /// Read the output of llc from disc
 fn read_llc_output(mut bc_path: String) -> String {
     let len = bc_path.len();
+   // change the file extension from ".bc" to ".s"
     bc_path.truncate(len - 2);
     bc_path.push_str("s");
     std::fs::read_to_string(bc_path).expect("could not open llc output")
