@@ -62,9 +62,9 @@ pub fn count_instructions<'p, B: Backend>(
     state: &State<'p, B>,
 ) -> Result<(String, usize), String> {
     // matches any line that is a machine instruction
-    let instr_re = Regex::new(r"^(\s*)([^\s\.@_])(.*)$").unwrap();
+    let instr_re = Regex::new(r"^(\s*)([^@_\s\.])(.*)$").unwrap();
     // matches the start of a function or bb
-    let bb_or_func_re = Regex::new(r"(^_.+:$)|(^@\s*%bb.\d+:.*$)").unwrap();
+    let bb_or_func_re = Regex::new(r"(^_.+:$)|(^@\s*%bb\.\d+:.*$)").unwrap();
 
     let mut res = String::new();
     let mut num_instrs = 0;
