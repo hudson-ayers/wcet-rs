@@ -2,3 +2,5 @@
 /results
 Cargo.lock
 results_*.txt
+
+.vscode

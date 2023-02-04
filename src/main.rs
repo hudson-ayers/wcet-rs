@@ -17,6 +17,9 @@ use structopt::StructOpt;
 
 extern crate log;
 
+mod instruction_counter;
+use instruction_counter::*;
+
 arg_enum! {
     #[derive(Debug)]
     enum KernelWorkType {
@@ -95,6 +98,7 @@ fn analyze_and_save_results(
     timeout_s: u64,
     resultspath: &str,
     time_results: bool,
+    disassembly: &Disassem,
 ) -> Result<String, String> {
     let paths = glob(&[bc_dir, "/**/*.bc"].concat())
         .unwrap()
@@ -125,8 +129,15 @@ fn analyze_and_save_results(
     let ret =
         match haybale::dyn_dispatch::find_longest_path(func_name, &project, config, time_results) {
             Ok((len, state)) => {
-                println!("len: {}", len);
-                let data = "len: ".to_owned()
+                let (raw_instruction_str, raw_instruction_count) =
+                    count_instructions(disassembly, &state)
+                        .expect("failed to get raw instruction count");
+
+                let data = "Assembly len: ".to_owned()
+                    + &raw_instruction_count.to_string()
+                    + "\n"
+                    + &raw_instruction_str
+                    + "IR len: "
                     + &len.to_string()
                     + "\n"
                     + &state.pretty_path_llvm_instructions();
@@ -279,15 +290,18 @@ fn main() -> Result<(), String> {
 
     // For now, assume target under analysis, located in the tock submodule of this crate.
     // Assume it is a thumbv7 target unless it is one of three whitelisted riscv targets.
-    let bc_dir: String = opt.tockpath.clone()
+    let target_dir: String = opt.tockpath.clone()
         + if board_path_str.contains("opentitan")
             || board_path_str.contains("arty_e21")
             || board_path_str.contains("hifive1")
         {
-            "/target/riscv32imc-unknown-none-elf/release/deps/"
+            "/target/riscv32imc-unknown-none-elf/release/"
         } else {
-            "/target/thumbv7em-none-eabi/release/deps/"
+            "/target/thumbv7em-none-eabi/release/"
         };
+
+    let bc_dir: String = target_dir + "deps/";
+    let disassembly = get_disassembly(&bc_dir, &opt.board);
 
     let paths = glob(&[&bc_dir, "/**/*.bc"].concat())
         .unwrap()
@@ -348,6 +362,7 @@ fn main() -> Result<(), String> {
         let name = board_path_str.clone();
         let bc_dir_cpy = bc_dir.clone();
         let resultspath = opt.resultspath.clone();
+        let disassembly_cpy: Disassem = disassembly.clone();
         let time_results = opt.time_results;
         children.push(thread::spawn(move || {
             match analyze_and_save_results(
@@ -357,6 +372,7 @@ fn main() -> Result<(), String> {
                 timeout,
                 &resultspath,
                 time_results,
+                &disassembly_cpy,
             ) {
                 Ok(s) => {
                     arc.lock().map_or((), |mut map| {
