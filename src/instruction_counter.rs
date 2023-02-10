@@ -71,6 +71,37 @@ fn build_func_and_bb_patterns(location: &Location) -> (Regex, Regex) {
     (func_re, bb_re)
 }
 
+fn find_outlined_function(
+    instr: &str,
+    disassembly: &Disassem,
+    instr_re: &Regex,
+) -> (String, usize) {
+    let mut func_name = instr[4..].to_owned();
+    func_name.push(':');
+
+    let mut i = 0;
+
+    while i < disassembly.len() && !(disassembly[i] == func_name) {
+        i += 1;
+    }
+    i += 1;
+
+    let mut res = func_name;
+    res.push('\n');
+    let mut func_len = 0;
+    while i < disassembly.len() && !disassembly[i].contains(".Lfunc_end") {
+        if instr_re.is_match(&disassembly[i]) {
+            res.push_str(&disassembly[i]);
+            res.push('\n');
+            func_len += 1;
+        }
+        i += 1;
+    }
+    res.push_str("OUTLINED_FUNCTION_END\n");
+
+    (res, func_len)
+}
+
 /// Count the number of machine instructions corresponding to the current path
 pub fn count_instructions<'p, B: Backend>(
     disassembly: &Disassem,
@@ -110,12 +141,19 @@ pub fn count_instructions<'p, B: Backend>(
                 index += 1;
 
                 // append every machine instruction encountered
-                // TODO: account for OUTLINED_FUNCTIONs and other potential hazards
+                // TODO: check for potential hazards
                 while index < disassembly.len() && !bb_or_func_re.is_match(&disassembly[index]) {
                     if instr_re.is_match(&disassembly[index]) {
                         res.push_str(&disassembly[index]);
                         res.push('\n');
                         current_block_instr_len += 1;
+
+                        if disassembly[index].contains("bl	OUTLINED_FUNCTION") {
+                            let (outlined_str, outlined_len) =
+                                find_outlined_function(&disassembly[index], disassembly, &instr_re);
+                            res.push_str(&outlined_str);
+                            current_block_instr_len += outlined_len;
+                        }
                     }
                     index += 1;
                 }
