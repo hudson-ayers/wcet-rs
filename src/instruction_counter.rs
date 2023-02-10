@@ -48,9 +48,24 @@ fn build_func_and_bb_patterns(location: &Location) -> (Regex, Regex) {
     let func_re = Regex::new(&func_pat).unwrap();
 
     // matches the start of the desired bb
-    // TODO: The basic block name can take on many forms...
-    let bb_name = &location.bb.name;
-    let bb_pat = format!(r"^.*(@\s*{}).*$", bb_name);
+    let bb_name = &location.bb.name.to_string();
+    let bb_num_pat = Regex::new(r"%(bb)?(\d+)").unwrap();
+    let bb_exit_pat = Regex::new(r"_.*\.exit").unwrap();
+    let bb_pat = if bb_name == "%start" {
+        r"^.*(@\s*%bb\.0:).*$".to_owned()
+    } else if bb_num_pat.is_match(bb_name) {
+        let caps = bb_num_pat.captures(bb_name).unwrap();
+        let num_str = caps.get(2).unwrap().as_str();
+        let num_opt = num_str.parse::<i32>();
+        match num_opt {
+            Ok(num) => format!(r"^.*(@\s*%bb\.{}:).*$", num),
+            Err(_) => panic!("cannot parse int: {}", num_str),
+        }
+    } else if bb_exit_pat.is_match(bb_name) {
+        format!(r"^.*(@ {}).*$", bb_name)
+    } else {
+        panic!("bb name format not recognized: {}", bb_name);
+    };
     let bb_re = Regex::new(&bb_pat).unwrap();
 
     (func_re, bb_re)
