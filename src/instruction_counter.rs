@@ -44,7 +44,7 @@ pub fn get_disassembly(bc_dir: &String, board_name: &String) -> Disassem {
 fn build_func_and_bb_patterns(location: &Location) -> (Regex, Regex) {
     // matches the start of the desired function
     let func_name = &location.func.name;
-    let func_pat = format!(r"^{}:$", func_name);
+    let func_pat = format!(r"^{}:$", regex::escape(func_name));
     let func_re = Regex::new(&func_pat).unwrap();
 
     // matches the start of the desired bb
@@ -62,7 +62,7 @@ fn build_func_and_bb_patterns(location: &Location) -> (Regex, Regex) {
             Err(_) => panic!("cannot parse int: {}", num_str),
         }
     } else if bb_exit_pat.is_match(bb_name) {
-        format!(r"^.*(@ {}).*$", bb_name)
+        format!(r"^.*(@ {}).*$", regex::escape(bb_name))
     } else {
         panic!("bb name format not recognized: {}", bb_name);
     };
