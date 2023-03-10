@@ -40,6 +40,18 @@ pub fn get_disassembly(bc_dir: &String, board_name: &String) -> Disassem {
     llc_output.lines().map(|s| s.to_owned()).collect()
 }
 
+/// Apply this transformation:
+///     %bb_name → %"bb_name"
+fn quote_bb_name(bb_name: &String) -> String {
+    let mut res = bb_name.to_owned();
+    if res.len() < 1 {
+        panic!("bb_name too short");
+    }
+    res.insert(1, '"');
+    res.push('"');
+    res
+}
+
 /// Build the regexes used to find the function and basic block location
 fn build_func_and_bb_patterns(location: &Location) -> (Regex, Regex) {
     // matches the start of the desired function
@@ -50,7 +62,7 @@ fn build_func_and_bb_patterns(location: &Location) -> (Regex, Regex) {
     // matches the start of the desired bb
     let bb_name = &location.bb.name.to_string();
     let bb_num_pat = Regex::new(r"%(bb)?(\d+)").unwrap();
-    let bb_exit_pat = Regex::new(r"_.*\.exit").unwrap();
+    let bb_exit_pat = Regex::new(r"%_.*\.exit").unwrap();
     let bb_pat = if bb_name == "%start" {
         r"^.*(@\s*%bb\.0:).*$".to_owned()
     } else if bb_num_pat.is_match(bb_name) {
@@ -62,7 +74,7 @@ fn build_func_and_bb_patterns(location: &Location) -> (Regex, Regex) {
             Err(_) => panic!("cannot parse int: {}", num_str),
         }
     } else if bb_exit_pat.is_match(bb_name) {
-        format!(r"^.*(@ {}).*$", regex::escape(bb_name))
+        format!(r"^.*(@ {}).*$", regex::escape(&quote_bb_name(bb_name)))
     } else {
         panic!("bb name format not recognized: {}", bb_name);
     };
