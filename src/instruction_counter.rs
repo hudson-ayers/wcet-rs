@@ -102,6 +102,52 @@ fn find_outlined_function(
     (res, func_len)
 }
 
+/// Given an index i that points to the first line of a function,
+/// find the desired basic block within it and append the instructions
+/// contained within to res. Return whether the basic block was found
+/// and the number of instructions it contains.
+fn find_bb_and_count(
+    disassembly: &Disassem,
+    i: usize,
+    instr_re: &Regex,
+    bb_re: &Regex,
+    any_func_re: &Regex,
+    bb_or_func_re: &Regex,
+    res: &mut String,
+) -> (bool, usize) {
+    let mut current_block_instr_len = 0;
+    let mut index = i;
+
+    // skip to the start of the basic block
+    while index < disassembly.len() && !bb_re.is_match(&disassembly[index]) {
+        if any_func_re.is_match(&disassembly[index]) {
+            return (false, 0);
+        }
+        index += 1;
+    }
+    index += 1;
+
+    // append every machine instruction encountered
+    // TODO: check for potential hazards
+    while index < disassembly.len() && !bb_or_func_re.is_match(&disassembly[index]) {
+        if instr_re.is_match(&disassembly[index]) {
+            res.push_str(&disassembly[index]);
+            res.push('\n');
+            current_block_instr_len += 1;
+
+            if disassembly[index].contains("bl	OUTLINED_FUNCTION") {
+                let (outlined_str, outlined_len) =
+                    find_outlined_function(&disassembly[index], disassembly, &instr_re);
+                res.push_str(&outlined_str);
+                current_block_instr_len += outlined_len;
+            }
+        }
+        index += 1;
+    }
+
+    (true, current_block_instr_len)
+}
+
 /// Count the number of machine instructions corresponding to the current path
 pub fn count_instructions<'p, B: Backend>(
     disassembly: &Disassem,
@@ -109,6 +155,8 @@ pub fn count_instructions<'p, B: Backend>(
 ) -> Result<(String, usize), String> {
     // matches any line that is a machine instruction
     let instr_re = Regex::new(r"^(\s*)([^@_\s\.])(.*)$").unwrap();
+    // matches the start of a function
+    let any_func_re = Regex::new("^_.+:$").unwrap();
     // matches the start of a function or bb
     let bb_or_func_re = Regex::new(r"(^_.+:$)|(^@\s*%bb\.\d+:.*$)").unwrap();
 
@@ -128,35 +176,21 @@ pub fn count_instructions<'p, B: Backend>(
         let (func_re, bb_re) = build_func_and_bb_patterns(location);
 
         let mut func_found = false;
+        let mut bb_found = false;
         let mut current_block_instr_len = 0;
         for (i, line) in disassembly.iter().enumerate() {
             if func_re.is_match(line) {
                 func_found = true;
 
-                // skip to the start of the basic block
-                let mut index = i;
-                while index < disassembly.len() && !bb_re.is_match(&disassembly[index]) {
-                    index += 1;
-                }
-                index += 1;
-
-                // append every machine instruction encountered
-                // TODO: check for potential hazards
-                while index < disassembly.len() && !bb_or_func_re.is_match(&disassembly[index]) {
-                    if instr_re.is_match(&disassembly[index]) {
-                        res.push_str(&disassembly[index]);
-                        res.push('\n');
-                        current_block_instr_len += 1;
-
-                        if disassembly[index].contains("bl	OUTLINED_FUNCTION") {
-                            let (outlined_str, outlined_len) =
-                                find_outlined_function(&disassembly[index], disassembly, &instr_re);
-                            res.push_str(&outlined_str);
-                            current_block_instr_len += outlined_len;
-                        }
-                    }
-                    index += 1;
-                }
+                (bb_found, current_block_instr_len) = find_bb_and_count(
+                    disassembly,
+                    i + 1,
+                    &instr_re,
+                    &bb_re,
+                    &any_func_re,
+                    &bb_or_func_re,
+                    &mut res,
+                );
 
                 break;
             }
@@ -164,9 +198,11 @@ pub fn count_instructions<'p, B: Backend>(
 
         num_instrs += current_block_instr_len;
         if !func_found {
-            res.push_str("Did not find the function...\n");
+            res.push_str("Function not found...\n");
+        } else if !bb_found {
+            res.push_str("Basic block not found...\n");
         } else if current_block_instr_len == 0 {
-            res.push_str("Basic block is empty or not found...\n");
+            res.push_str("Basic block is empty...\n");
         }
     }
 
