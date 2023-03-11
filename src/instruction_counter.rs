@@ -1,10 +1,19 @@
 use glob::glob;
+use once_cell::sync::Lazy;
 use regex::Regex;
 use std::{path::PathBuf, process::Command};
 
 use haybale::{backend::Backend, Location, State};
 
 pub type Disassem = Vec<String>;
+
+// matches any line that is a machine instruction
+static INST: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\s*)([^@_\s\.])(.*)$").unwrap());
+// matches the start of a function
+static ANY_FUNC: Lazy<Regex> = Lazy::new(|| Regex::new("^_.+:$").unwrap());
+// matches the start of a function or bb
+static ANY_BB_OR_FUNC: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(^_.+:$)|(^@\s*%bb\.\d+:.*$)|(^\.LBB.*:$)").unwrap());
 
 /// Find the bc file to be passed to llc
 fn find_bc_file(bc_dir: &String, board_name: &String) -> String {
@@ -64,13 +73,14 @@ fn build_func_and_bb_patterns(location: &Location) -> (Regex, Regex) {
     let bb_num_pat = Regex::new(r"%(bb)?(\d+)").unwrap();
     let bb_exit_pat = Regex::new(r"%_.*\.exit").unwrap();
     let bb_pat = if bb_name == "%start" {
+        // Start of function maps to anything
         r"^.*(@\s*%bb\.0:).*$".to_owned()
     } else if bb_num_pat.is_match(bb_name) {
         let caps = bb_num_pat.captures(bb_name).unwrap();
         let num_str = caps.get(2).unwrap().as_str();
         let num_opt = num_str.parse::<i32>();
         match num_opt {
-            Ok(num) => format!(r"^.*(@\s*%bb\.{}:).*$", num),
+            Ok(num) => format!(r"^((.*(@\s*%bb\.{}:))|(\.LBB\d+_{}:)).*$", num, num),
             Err(_) => panic!("cannot parse int: {}", num_str),
         }
     } else if bb_exit_pat.is_match(bb_name) {
@@ -121,10 +131,7 @@ fn find_outlined_function(
 fn find_bb_and_count(
     disassembly: &Disassem,
     i: usize,
-    instr_re: &Regex,
     bb_re: &Regex,
-    any_func_re: &Regex,
-    bb_or_func_re: &Regex,
     res: &mut String,
 ) -> (bool, usize) {
     let mut current_block_instr_len = 0;
@@ -132,7 +139,7 @@ fn find_bb_and_count(
 
     // skip to the start of the basic block
     while index < disassembly.len() && !bb_re.is_match(&disassembly[index]) {
-        if any_func_re.is_match(&disassembly[index]) {
+        if ANY_FUNC.is_match(&disassembly[index]) {
             return (false, 0);
         }
         index += 1;
@@ -140,16 +147,15 @@ fn find_bb_and_count(
     index += 1;
 
     // append every machine instruction encountered
-    // TODO: check for potential hazards
-    while index < disassembly.len() && !bb_or_func_re.is_match(&disassembly[index]) {
-        if instr_re.is_match(&disassembly[index]) {
+    while index < disassembly.len() && !ANY_BB_OR_FUNC.is_match(&disassembly[index]) {
+        if INST.is_match(&disassembly[index]) {
             res.push_str(&disassembly[index]);
             res.push('\n');
             current_block_instr_len += 1;
 
             if disassembly[index].contains("bl	OUTLINED_FUNCTION") {
                 let (outlined_str, outlined_len) =
-                    find_outlined_function(&disassembly[index], disassembly, &instr_re);
+                    find_outlined_function(&disassembly[index], disassembly, &INST);
                 res.push_str(&outlined_str);
                 current_block_instr_len += outlined_len;
             }
@@ -165,17 +171,9 @@ pub fn count_instructions<'p, B: Backend>(
     disassembly: &Disassem,
     state: &State<'p, B>,
 ) -> Result<(String, usize), String> {
-    // matches any line that is a machine instruction
-    let instr_re = Regex::new(r"^(\s*)([^@_\s\.])(.*)$").unwrap();
-    // matches the start of a function
-    let any_func_re = Regex::new("^_.+:$").unwrap();
-    // matches the start of a function or bb
-    let bb_or_func_re = Regex::new(r"(^_.+:$)|(^@\s*%bb\.\d+:.*$)").unwrap();
-
     let mut res = String::new();
     let mut num_instrs = 0;
 
-    // TODO: can control flow leave a bb in the middle?
     for path_entry in state.get_path().iter() {
         let location = &path_entry.0;
 
@@ -194,15 +192,8 @@ pub fn count_instructions<'p, B: Backend>(
             if func_re.is_match(line) {
                 func_found = true;
 
-                (bb_found, current_block_instr_len) = find_bb_and_count(
-                    disassembly,
-                    i + 1,
-                    &instr_re,
-                    &bb_re,
-                    &any_func_re,
-                    &bb_or_func_re,
-                    &mut res,
-                );
+                (bb_found, current_block_instr_len) =
+                    find_bb_and_count(disassembly, i + 1, &bb_re, &mut res);
 
                 break;
             }
